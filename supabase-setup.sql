@@ -139,3 +139,43 @@ on storage.objects
 for delete
 to authenticated
 using (bucket_id = 'wedding-media' and public.is_wedding_admin());
+
+alter table public.wedding_media add column if not exists delete_token text;
+
+create index if not exists wedding_media_delete_lookup_idx
+on public.wedding_media (file_path, delete_token)
+where is_public = true;
+
+drop policy if exists "Uploader can hide own public wedding media" on public.wedding_media;
+create policy "Uploader can hide own public wedding media"
+on public.wedding_media
+for update
+to anon, authenticated
+using (
+  is_public = true
+  and delete_token is not null
+  and delete_token = (nullif(current_setting('request.headers', true), '')::json ->> 'x-delete-token')
+)
+with check (
+  is_public = false
+  and public_url is null
+  and delete_token is not null
+  and delete_token = (nullif(current_setting('request.headers', true), '')::json ->> 'x-delete-token')
+);
+
+drop policy if exists "Uploader can delete own public wedding files" on storage.objects;
+create policy "Uploader can delete own public wedding files"
+on storage.objects
+for delete
+to anon, authenticated
+using (
+  bucket_id = 'wedding-media'
+  and exists (
+    select 1
+    from public.wedding_media media
+    where media.file_path = storage.objects.name
+      and media.is_public = true
+      and media.delete_token is not null
+      and media.delete_token = (nullif(current_setting('request.headers', true), '')::json ->> 'x-delete-token')
+  )
+);

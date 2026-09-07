@@ -3,8 +3,11 @@
 const config = window.SUPABASE_CONFIG || {};
 const isConfigured = Boolean(config.url && config.anonKey && !config.url.includes("SEU-PROJETO") && !config.anonKey.includes("SUA_CHAVE"));
 const supabase = isConfigured ? createClient(config.url, config.anonKey) : null;
+const createSupabaseWithDeleteToken = (token) => createClient(config.url, config.anonKey, { global: { headers: { "x-delete-token": token } } });
 const mediaBucket = config.mediaBucket || "wedding-media";
 const backupBucket = config.backupBucket || "wedding-media-backup";
+const pendingPostSeconds = 60;
+const postedMediaStorageKey = "weddingPostedMediaIds";
 
 const revealItems = document.querySelectorAll(".reveal");
 
@@ -45,15 +48,83 @@ const requireSupabase = (form) => {
   return false;
 };
 
+const getPostedMediaIds = () => {
+  try {
+    return JSON.parse(localStorage.getItem(postedMediaStorageKey) || "[]");
+  } catch {
+    return [];
+  }
+};
+
+const rememberPostedMediaId = (id, deleteToken) => {
+  const items = getPostedMediaIds().filter((item) => (typeof item === "string" ? item : item.id) !== id);
+  items.push({ id, deleteToken });
+  localStorage.setItem(postedMediaStorageKey, JSON.stringify(items));
+};
+
+const forgetPostedMediaId = (id) => {
+  const ids = getPostedMediaIds().filter((item) => (typeof item === "string" ? item : item.id) !== id);
+  localStorage.setItem(postedMediaStorageKey, JSON.stringify(ids));
+};
+
+const createPendingPublication = (form, seconds = pendingPostSeconds) => {
+  const existing = form.querySelector("[data-pending-publication]");
+  existing?.remove();
+
+  const panel = document.createElement("div");
+  panel.className = "pending-publication";
+  panel.dataset.pendingPublication = "";
+  panel.innerHTML = `<div class="pending-timer" data-pending-timer>${seconds}s</div>
+    <div class="pending-actions">
+      <button class="btn btn-primary" type="button" data-confirm-post>Confirmar postagem</button>
+      <button class="btn btn-secondary" type="button" data-cancel-post>Cancelar postagem</button>
+    </div>
+    <p class="pending-warning">Tempo limite para cancelar a postagem ${seconds}s.</p>`;
+  form.append(panel);
+
+  return {
+    panel,
+    timer: panel.querySelector("[data-pending-timer]"),
+    confirm: panel.querySelector("[data-confirm-post]"),
+    cancel: panel.querySelector("[data-cancel-post]"),
+    warning: panel.querySelector(".pending-warning")
+  };
+};
+
+const waitForPublicationDecision = (form) => new Promise((resolve) => {
+  const controls = createPendingPublication(form);
+  let remaining = pendingPostSeconds;
+  let finished = false;
+
+  const finish = (shouldPublish) => {
+    if (finished) return;
+    finished = true;
+    window.clearInterval(interval);
+    controls.panel.remove();
+    resolve(shouldPublish);
+  };
+
+  const interval = window.setInterval(() => {
+    remaining -= 1;
+    controls.timer.textContent = `${remaining}s`;
+    controls.warning.textContent = `Tempo limite para cancelar a postagem ${remaining}s.`;
+    if (remaining <= 0) finish(true);
+  }, 1000);
+
+  controls.confirm.addEventListener("click", () => finish(true));
+  controls.cancel.addEventListener("click", () => finish(false));
+});
+
 const createMediaCard = (item) => {
   const isVideo = item.media_type === "video";
+  const canDelete = Boolean(item.id && item.file_path);
   const media = isVideo
     ? `<video src="${escapeHtml(item.public_url)}" preload="metadata" muted playsinline></video>`
     : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
 
-  return `<article class="media-card" data-type="${item.media_type}" data-src="${escapeHtml(item.public_url)}" style="--ratio:1/1">
+  return `<article class="media-card" data-id="${escapeHtml(item.id || "")}" data-file-path="${escapeHtml(item.file_path || "")}" data-type="${item.media_type}" data-src="${escapeHtml(item.public_url)}" style="--ratio:1/1">
     ${isVideo ? '<span class="video-badge">▶</span>' : ""}${media}
-    <div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p><small>${formatDate(item.created_at)}</small><button class="btn btn-secondary" type="button">Abrir publicação</button></div>
+    <div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p><small>${formatDate(item.created_at)}</small><div class="media-card-actions"><button class="btn btn-secondary" type="button" data-open-media>Abrir publicação</button>${canDelete ? '<button class="btn btn-secondary btn-danger" type="button" data-delete-user-media>Excluir postagem</button>' : ""}</div></div>
   </article>`;
 };
 
@@ -90,7 +161,7 @@ const bindGalleryModal = () => {
   const modalTitle = document.querySelector(".modal h2");
   const modalText = document.querySelector(".modal p");
 
-  document.querySelectorAll(".media-card button").forEach((button) => {
+  document.querySelectorAll(".media-card [data-open-media], .media-card button:not([data-delete-user-media])").forEach((button) => {
     button.addEventListener("click", () => {
       const card = button.closest(".media-card");
       const isVideo = card.dataset.type === "video";
@@ -121,7 +192,7 @@ const loadGallery = async () => {
 
   const { data, error } = await supabase
     .from("wedding_media")
-    .select("guest_name, caption, public_url, media_type, created_at")
+    .select("id, guest_name, caption, file_path, public_url, media_type, created_at")
     .eq("is_public", true)
     .order("created_at", { ascending: false });
 
@@ -177,9 +248,11 @@ const bindMediaForm = () => {
     }
 
     submit.disabled = true;
-    setStatus(form, `Enviando ${files.length} arquivo(s)...`);
+    setStatus(form, `Enviando backup de ${files.length} arquivo(s)...`);
 
     try {
+      const pendingUploads = [];
+
       for (const file of files) {
         const mediaType = file.type.startsWith("video/") ? "video" : "photo";
         const extension = file.name.split(".").pop()?.toLowerCase() || "bin";
@@ -192,21 +265,39 @@ const bindMediaForm = () => {
         const backupPath = `backup/${path}`;
         const { error: backupUploadError } = await supabase.storage.from(backupBucket).upload(backupPath, file, uploadOptions);
         if (backupUploadError) throw backupUploadError;
+        pendingUploads.push({ file, mediaType, path, backupPath, uploadOptions });
+      }
 
+      setStatus(form, "Backup salvo. Confirme para publicar agora ou aguarde 60 segundos.");
+      const shouldPublish = await waitForPublicationDecision(form);
+
+      if (!shouldPublish) {
+        form.reset();
+        setStatus(form, "Postagem cancelada. O backup permanece armazenado para os noivos.");
+        return;
+      }
+
+      setStatus(form, `Publicando ${pendingUploads.length} arquivo(s)...`);
+
+      for (const pending of pendingUploads) {
+        const { file, mediaType, path, backupPath, uploadOptions } = pending;
         const { error: uploadError } = await supabase.storage.from(mediaBucket).upload(path, file, uploadOptions);
         if (uploadError) throw uploadError;
 
         const { data: publicData } = supabase.storage.from(mediaBucket).getPublicUrl(path);
-        const { error: insertError } = await supabase.from("wedding_media").insert({
+        const deleteToken = crypto.randomUUID();
+        const { data: insertedMedia, error: insertError } = await supabase.from("wedding_media").insert({
           guest_name: guestName,
           caption,
           file_path: path,
           backup_file_path: backupPath,
           public_url: publicData.publicUrl,
           media_type: mediaType,
-          is_public: isPublic
-        });
+          is_public: isPublic,
+          delete_token: deleteToken
+        }).select("id").single();
         if (insertError) throw insertError;
+        if (insertedMedia?.id) rememberPostedMediaId(insertedMedia.id, deleteToken);
       }
 
       form.reset();
@@ -217,6 +308,51 @@ const bindMediaForm = () => {
     } finally {
       submit.disabled = false;
     }
+  });
+};
+
+const bindUserMediaDelete = () => {
+  const gallery = document.querySelector("[data-gallery-grid]");
+  if (!gallery) return;
+
+  gallery.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-delete-user-media]");
+    if (!button || !supabase) return;
+
+    const card = button.closest(".media-card");
+    const id = card?.dataset.id;
+    const filePath = card?.dataset.filePath;
+    const savedMedia = getPostedMediaIds().find((item) => (typeof item === "string" ? item : item.id) === id);
+    const deleteToken = typeof savedMedia === "string" ? "" : savedMedia?.deleteToken;
+    if (!id || !filePath) return;
+    if (!deleteToken) {
+      alert("Somente a postagem criada neste dispositivo pode ser excluida daqui. O backup permanece com os noivos.");
+      return;
+    }
+    if (!confirm("Excluir esta postagem da galeria? O backup permanecera armazenado para os noivos.")) return;
+
+    button.disabled = true;
+    button.textContent = "Excluindo...";
+
+    const authorizedSupabase = createSupabaseWithDeleteToken(deleteToken);
+    const { error: removeError } = await authorizedSupabase.storage.from(mediaBucket).remove([filePath]);
+    if (removeError) {
+      alert("Nao foi possivel excluir o arquivo publico.");
+      button.disabled = false;
+      button.textContent = "Excluir postagem";
+      return;
+    }
+
+    const { error: updateError } = await authorizedSupabase.from("wedding_media").update({ is_public: false, public_url: null }).eq("id", id);
+    if (updateError) {
+      alert("O arquivo saiu do bucket publico, mas nao foi possivel atualizar a listagem.");
+      button.disabled = false;
+      button.textContent = "Excluir postagem";
+      return;
+    }
+
+    forgetPostedMediaId(id);
+    card.remove();
   });
 };
 
@@ -352,6 +488,7 @@ if (heroCarousel) {
 bindGalleryFilters();
 bindGalleryModal();
 bindMediaForm();
+bindUserMediaDelete();
 bindMessageForm();
 loadGallery();
 loadPreviewMosaic();
@@ -498,3 +635,6 @@ const bindAdmin = () => {
 };
 
 bindAdmin();
+
+
+
