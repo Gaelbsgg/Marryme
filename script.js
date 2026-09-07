@@ -366,7 +366,7 @@ const createAdminMediaItem = (item) => {
   return `<article class="admin-item" data-id="${item.id}" data-file-path="${escapeHtml(item.file_path)}">
     ${preview}
     <div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Sem legenda")}</p><small>${formatDate(item.created_at)} · ${isVideo ? "Video" : "Foto"}</small></div>
-    <button class="btn btn-secondary" type="button" data-delete-media>Excluir da visualizacao</button>
+    <div class="admin-actions"><a class="btn btn-secondary" href="${escapeHtml(item.public_url)}" download target="_blank" rel="noopener noreferrer">Baixar</a><button class="btn btn-secondary" type="button" data-delete-media>Excluir da visualizacao</button></div>
   </article>`;
 };
 
