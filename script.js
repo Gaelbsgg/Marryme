@@ -3,638 +3,389 @@
 const config = window.SUPABASE_CONFIG || {};
 const isConfigured = Boolean(config.url && config.anonKey && !config.url.includes("SEU-PROJETO") && !config.anonKey.includes("SUA_CHAVE"));
 const supabase = isConfigured ? createClient(config.url, config.anonKey) : null;
-const createSupabaseWithDeleteToken = (token) => createClient(config.url, config.anonKey, { global: { headers: { "x-delete-token": token } } });
 const mediaBucket = config.mediaBucket || "wedding-media";
 const backupBucket = config.backupBucket || "wedding-media-backup";
 const pendingPostSeconds = 60;
-const postedMediaStorageKey = "weddingPostedMediaIds";
+const deviceStorageKey = "weddingDeviceId";
+const likedStorageKey = "weddingLikedItems";
+let galleryItems = [];
+let slideIndex = 0;
+let featuredIndex = 0;
+let featuredTimer;
 
 const revealItems = document.querySelectorAll(".reveal");
-
 if ("IntersectionObserver" in window) {
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach((entry) => {
-      if (entry.isIntersecting) entry.target.classList.add("in");
-    });
-  }, { threshold: 0.12 });
+  const observer = new IntersectionObserver((entries) => entries.forEach((entry) => {
+    if (entry.isIntersecting) entry.target.classList.add("in");
+  }), { threshold: 0.12 });
   revealItems.forEach((el) => observer.observe(el));
 } else {
   revealItems.forEach((el) => el.classList.add("in"));
 }
 
-const formatDate = (value) => new Intl.DateTimeFormat("pt-BR", {
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric"
-}).format(new Date(value));
-
-const escapeHtml = (value = "") => value.replace(/[&<>"]/g, (char) => ({
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;"
-}[char]));
-
+const formatDate = (value) => new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(value));
+const escapeHtml = (value = "") => String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
 const setStatus = (form, message, isError = false) => {
   const status = form?.querySelector(".form-status");
   if (!status) return;
   status.textContent = message;
   status.classList.toggle("is-error", isError);
 };
-
 const requireSupabase = (form) => {
   if (supabase) return true;
   setStatus(form, "Configure o arquivo supabase-config.js com a URL e a chave publica do Supabase.", true);
   return false;
 };
 
-const getPostedMediaIds = () => {
-  try {
-    return JSON.parse(localStorage.getItem(postedMediaStorageKey) || "[]");
-  } catch {
-    return [];
+const getDeviceId = () => {
+  let id = localStorage.getItem(deviceStorageKey);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(deviceStorageKey, id);
   }
+  return id;
+};
+const getDeviceName = () => {
+  const ua = navigator.userAgent || "Dispositivo desconhecido";
+  const platform = navigator.userAgentData?.platform || navigator.platform || "";
+  return `${platform} - ${ua}`.slice(0, 240);
+};
+const getLikedItems = () => {
+  try { return JSON.parse(localStorage.getItem(likedStorageKey) || "[]"); } catch { return []; }
+};
+const setLikedItems = (ids) => localStorage.setItem(likedStorageKey, JSON.stringify(ids));
+const isLiked = (id) => getLikedItems().includes(id);
+
+const getEngagement = async (mediaIds = []) => {
+  if (!mediaIds.length || !supabase) return {};
+  const { data } = await supabase.from("wedding_media_engagement").select("media_id, action").in("media_id", mediaIds);
+  return (data || []).reduce((acc, item) => {
+    acc[item.media_id] ||= { like: 0, share: 0, download: 0, comment: 0 };
+    acc[item.media_id][item.action] = (acc[item.media_id][item.action] || 0) + 1;
+    return acc;
+  }, {});
 };
 
-const rememberPostedMediaId = (id, deleteToken) => {
-  const items = getPostedMediaIds().filter((item) => (typeof item === "string" ? item : item.id) !== id);
-  items.push({ id, deleteToken });
-  localStorage.setItem(postedMediaStorageKey, JSON.stringify(items));
+const createStatsHtml = (item) => {
+  const stats = item.stats || { like: 0, share: 0, download: 0, comment: 0 };
+  return `<div class="post-stats" data-media-id="${escapeHtml(item.id)}">
+    <button class="post-icon ${isLiked(item.id) ? "active" : ""}" type="button" data-like-media aria-label="Curtir">♡</button><span data-like-count>${stats.like || 0}</span>
+    <button class="post-icon" type="button" data-share-media aria-label="Compartilhar">↗</button><span data-share-count>${stats.share || 0}</span>
+    <button class="post-icon" type="button" data-download-media-public aria-label="Baixar">↓</button><span data-download-count>${stats.download || 0}</span>
+    <button class="post-icon" type="button" data-toggle-comments aria-label="Comentarios">☰</button><span data-comment-count>${stats.comment || 0}</span>
+  </div>
+  <form class="comment-form" data-comment-form hidden><input name="comment" placeholder="Adicionar comentario" required/><button class="btn btn-secondary" type="submit">Enviar</button></form>`;
 };
-
-const forgetPostedMediaId = (id) => {
-  const ids = getPostedMediaIds().filter((item) => (typeof item === "string" ? item : item.id) !== id);
-  localStorage.setItem(postedMediaStorageKey, JSON.stringify(ids));
-};
-
-const createPendingPublication = (form, seconds = pendingPostSeconds) => {
-  const existing = form.querySelector("[data-pending-publication]");
-  existing?.remove();
-
-  const panel = document.createElement("div");
-  panel.className = "pending-publication";
-  panel.dataset.pendingPublication = "";
-  panel.innerHTML = `<div class="pending-timer" data-pending-timer>${seconds}s</div>
-    <div class="pending-actions">
-      <button class="btn btn-primary" type="button" data-confirm-post>Confirmar postagem</button>
-      <button class="btn btn-secondary" type="button" data-cancel-post>Cancelar postagem</button>
-    </div>
-    <p class="pending-warning">Tempo limite para cancelar a postagem ${seconds}s.</p>`;
-  form.append(panel);
-
-  return {
-    panel,
-    timer: panel.querySelector("[data-pending-timer]"),
-    confirm: panel.querySelector("[data-confirm-post]"),
-    cancel: panel.querySelector("[data-cancel-post]"),
-    warning: panel.querySelector(".pending-warning")
-  };
-};
-
-const waitForPublicationDecision = (form) => new Promise((resolve) => {
-  const controls = createPendingPublication(form);
-  let remaining = pendingPostSeconds;
-  let finished = false;
-
-  const finish = (shouldPublish) => {
-    if (finished) return;
-    finished = true;
-    window.clearInterval(interval);
-    controls.panel.remove();
-    resolve(shouldPublish);
-  };
-
-  const interval = window.setInterval(() => {
-    remaining -= 1;
-    controls.timer.textContent = `${remaining}s`;
-    controls.warning.textContent = `Tempo limite para cancelar a postagem ${remaining}s.`;
-    if (remaining <= 0) finish(true);
-  }, 1000);
-
-  controls.confirm.addEventListener("click", () => finish(true));
-  controls.cancel.addEventListener("click", () => finish(false));
-});
 
 const createMediaCard = (item) => {
   const isVideo = item.media_type === "video";
-  const canDelete = Boolean(item.id && item.file_path);
-  const media = isVideo
-    ? `<video src="${escapeHtml(item.public_url)}" preload="metadata" muted playsinline></video>`
-    : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
-
-  return `<article class="media-card" data-id="${escapeHtml(item.id || "")}" data-file-path="${escapeHtml(item.file_path || "")}" data-type="${item.media_type}" data-src="${escapeHtml(item.public_url)}" style="--ratio:1/1">
-    ${isVideo ? '<span class="video-badge">▶</span>' : ""}${media}
-    <div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p><small>${formatDate(item.created_at)}</small><div class="media-card-actions"><button class="btn btn-secondary" type="button" data-open-media>Abrir publicação</button>${canDelete ? '<button class="btn btn-secondary btn-danger" type="button" data-delete-user-media>Excluir postagem</button>' : ""}</div></div>
-  </article>`;
+  const media = isVideo ? `<video src="${escapeHtml(item.public_url)}" preload="metadata" controls playsinline></video>` : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
+  return `<article class="media-card" data-id="${escapeHtml(item.id)}" data-type="${item.media_type}" data-src="${escapeHtml(item.public_url)}" style="--ratio:1/1">${isVideo ? '<span class="video-badge">▶</span>' : ""}${media}<div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p><small>${formatDate(item.created_at)}</small><div class="media-card-actions"><button class="btn btn-secondary" type="button" data-open-media>Abrir publicação</button></div>${createStatsHtml(item)}</div></article>`;
 };
 
-const createPreviewItem = (item, index) => {
-  const label = escapeHtml(item.caption || "Momento compartilhado");
-  const url = escapeHtml(item.public_url);
-
-  if (item.media_type === "video") {
-    return `<figure>
-      <video src="${url}" preload="metadata" muted playsinline aria-label="${label}"></video>
-      <figcaption>▶</figcaption>
-    </figure>`;
-  }
-
-  return `<img loading="${index === 0 ? "eager" : "lazy"}" src="${url}" alt="${label}"/>`;
-};
-const bindGalleryFilters = () => {
-  document.querySelectorAll(".filter-btn").forEach((button) => {
-    button.addEventListener("click", () => {
-      const filter = button.dataset.filter;
-      document.querySelectorAll(".filter-btn").forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
-      document.querySelectorAll(".media-card").forEach((card) => {
-        card.hidden = filter !== "all" && card.dataset.type !== filter;
-      });
-    });
-  });
+const fetchPublicMedia = async (limit) => {
+  if (!supabase) return [];
+  const query = supabase.from("wedding_media").select("id, guest_name, caption, file_path, backup_file_path, public_url, media_type, created_at").eq("is_public", true).order("created_at", { ascending: false });
+  if (limit) query.limit(limit);
+  const { data, error } = await query;
+  if (error) throw error;
+  const stats = await getEngagement((data || []).map((item) => item.id));
+  return (data || []).map((item) => ({ ...item, stats: stats[item.id] || { like: 0, share: 0, download: 0, comment: 0 } }));
 };
 
-const bindGalleryModal = () => {
+const bindGalleryFilters = () => document.querySelectorAll(".filter-btn").forEach((button) => button.addEventListener("click", () => {
+  const filter = button.dataset.filter;
+  document.querySelectorAll(".filter-btn").forEach((item) => item.classList.remove("active"));
+  button.classList.add("active");
+  document.querySelectorAll(".media-card").forEach((card) => { card.hidden = filter !== "all" && card.dataset.type !== filter; });
+}));
+
+const openSlide = (index) => {
   const modal = document.querySelector(".modal");
-  const modalImg = document.querySelector(".modal img");
-  const modalVideo = document.querySelector(".modal video");
-  const modalTitle = document.querySelector(".modal h2");
-  const modalText = document.querySelector(".modal p");
+  if (!modal || !galleryItems.length) return;
+  slideIndex = (index + galleryItems.length) % galleryItems.length;
+  const item = galleryItems[slideIndex];
+  const modalImg = modal.querySelector("img");
+  const modalVideo = modal.querySelector("video");
+  const modalTitle = modal.querySelector("h2");
+  const modalText = modal.querySelector("p");
+  const isVideo = item.media_type === "video";
+  modalImg.hidden = isVideo;
+  modalImg.src = isVideo ? "" : item.public_url;
+  modalVideo.hidden = !isVideo;
+  modalVideo.src = isVideo ? item.public_url : "";
+  modalTitle.textContent = item.guest_name;
+  modalText.textContent = item.caption || "Momento compartilhado com carinho.";
+  modal.classList.add("open");
+};
+const bindGalleryModal = () => {
+  document.querySelectorAll(".media-card [data-open-media]").forEach((button) => button.addEventListener("click", () => {
+    const id = button.closest(".media-card")?.dataset.id;
+    openSlide(Math.max(0, galleryItems.findIndex((item) => item.id === id)));
+  }));
+};
 
-  document.querySelectorAll(".media-card [data-open-media], .media-card button:not([data-delete-user-media])").forEach((button) => {
-    button.addEventListener("click", () => {
-      const card = button.closest(".media-card");
-      const isVideo = card.dataset.type === "video";
-      const image = card.querySelector("img");
-      const video = card.querySelector("video");
-      const src = card.dataset.src || image?.src || video?.src;
-
-      if (modalImg) {
-        modalImg.hidden = isVideo;
-        modalImg.src = isVideo ? "" : src;
-        modalImg.alt = image?.alt || "Momento compartilhado";
-      }
-      if (modalVideo) {
-        modalVideo.hidden = !isVideo;
-        modalVideo.src = isVideo ? src : "";
-      }
-      modalTitle.textContent = card.querySelector("strong").textContent;
-      modalText.textContent = card.querySelector("p").textContent;
-      modal.classList.add("open");
-      modal.querySelector(".modal-close").focus();
-    });
+const updateStatInDom = (mediaId, action, delta) => {
+  document.querySelectorAll(`[data-media-id="${CSS.escape(mediaId)}"]`).forEach((stats) => {
+    const target = stats.querySelector(`[data-${action}-count]`);
+    if (target) target.textContent = Math.max(0, Number(target.textContent || 0) + delta);
+    if (action === "like") stats.querySelector("[data-like-media]")?.classList.toggle("active", delta > 0);
   });
+};
+const registerEngagement = async (mediaId, action, value = "") => {
+  if (!supabase || !mediaId) return false;
+  const { error } = await supabase.from("wedding_media_engagement").insert({ media_id: mediaId, action, device_id: getDeviceId(), device_name: getDeviceName(), value });
+  return !error;
+};
+const bindPostActions = () => {
+  document.addEventListener("dblclick", async (event) => {
+    const card = event.target.closest(".media-card, .featured-slide");
+    if (card?.dataset.id) await toggleLike(card.dataset.id);
+  });
+  document.addEventListener("click", async (event) => {
+    const stats = event.target.closest(".post-stats");
+    const mediaId = stats?.dataset.mediaId;
+    if (event.target.closest("[data-like-media]")) await toggleLike(mediaId);
+    if (event.target.closest("[data-toggle-comments]")) stats?.nextElementSibling?.toggleAttribute("hidden");
+    if (event.target.closest("[data-share-media]")) await shareMedia(mediaId);
+    if (event.target.closest("[data-download-media-public]")) await downloadMedia(mediaId);
+  });
+  document.addEventListener("submit", async (event) => {
+    const form = event.target.closest("[data-comment-form]");
+    if (!form) return;
+    event.preventDefault();
+    const mediaId = form.previousElementSibling?.dataset.mediaId;
+    const value = form.comment.value.trim();
+    if (!value) return;
+    if (await registerEngagement(mediaId, "comment", value)) {
+      form.reset();
+      updateStatInDom(mediaId, "comment", 1);
+    }
+  });
+};
+const toggleLike = async (mediaId) => {
+  if (!mediaId) return;
+  const liked = getLikedItems();
+  if (liked.includes(mediaId)) {
+    const { error } = await supabase.from("wedding_media_engagement").delete().eq("media_id", mediaId).eq("device_id", getDeviceId()).eq("action", "like");
+    if (!error) { setLikedItems(liked.filter((id) => id !== mediaId)); updateStatInDom(mediaId, "like", -1); }
+    return;
+  }
+  if (await registerEngagement(mediaId, "like")) { liked.push(mediaId); setLikedItems(liked); updateStatInDom(mediaId, "like", 1); }
+};
+const shareMedia = async (mediaId) => {
+  const item = galleryItems.find((media) => media.id === mediaId);
+  if (!item) return;
+  if (navigator.share) await navigator.share({ title: item.caption || "Momento do casamento", url: item.public_url }).catch(() => {});
+  else await navigator.clipboard?.writeText(item.public_url).catch(() => {});
+  if (await registerEngagement(mediaId, "share")) updateStatInDom(mediaId, "share", 1);
+};
+const downloadMedia = async (mediaId) => {
+  const item = galleryItems.find((media) => media.id === mediaId);
+  if (!item) return;
+  const link = document.createElement("a");
+  link.href = item.public_url;
+  link.download = item.file_path?.split("/").pop() || "momento-casamento";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  if (await registerEngagement(mediaId, "download")) updateStatInDom(mediaId, "download", 1);
 };
 
 const loadGallery = async () => {
   const gallery = document.querySelector("[data-gallery-grid]");
   if (!gallery || !supabase) return;
-
-  const { data, error } = await supabase
-    .from("wedding_media")
-    .select("id, guest_name, caption, file_path, public_url, media_type, created_at")
-    .eq("is_public", true)
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    gallery.insertAdjacentHTML("beforebegin", `<p class="empty-state">Nao foi possivel carregar a galeria agora.</p>`);
-    return;
-  }
-
-  if (data?.length) gallery.innerHTML = data.map(createMediaCard).join("");
-  bindGalleryModal();
+  try {
+    galleryItems = await fetchPublicMedia();
+    gallery.innerHTML = galleryItems.length ? galleryItems.map(createMediaCard).join("") : '<p class="empty-state">Nenhuma publicação real no momento.</p>';
+    bindGalleryModal();
+  } catch { gallery.insertAdjacentHTML("beforebegin", '<p class="empty-state">Nao foi possivel carregar a galeria agora.</p>'); }
 };
-
+const renderFeatured = () => {
+  const wrap = document.querySelector("[data-featured-media]");
+  if (!wrap || !galleryItems.length) return;
+  const item = galleryItems[featuredIndex % galleryItems.length];
+  const isVideo = item.media_type === "video";
+  wrap.innerHTML = `<article class="featured-slide" data-id="${escapeHtml(item.id)}">${isVideo ? `<video src="${escapeHtml(item.public_url)}" controls playsinline preload="metadata"></video>` : `<img src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`}<div class="featured-info"><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p>${createStatsHtml(item)}</div><button class="featured-nav featured-prev" type="button" data-featured-prev>‹</button><button class="featured-nav featured-next" type="button" data-featured-next>›</button></article>`;
+};
 const loadPreviewMosaic = async () => {
-  const mosaic = document.querySelector("[data-preview-mosaic]");
-  if (!mosaic || !supabase) return;
-
-  const { data, error } = await supabase
-    .from("wedding_media")
-    .select("caption, public_url, media_type, created_at")
-    .eq("is_public", true)
-    .order("created_at", { ascending: false })
-    .limit(5);
-
-  if (error) {
-    console.error(error);
-    return;
-  }
-
-  if (data?.length) {
-    mosaic.innerHTML = data.map(createPreviewItem).join("");
-    return;
-  }
-
-  mosaic.remove();
+  const wrap = document.querySelector("[data-featured-media], [data-preview-mosaic]");
+  if (!wrap || !supabase) return;
+  try {
+    galleryItems = await fetchPublicMedia(8);
+    if (!galleryItems.length) { wrap.innerHTML = '<p class="empty-state">Nenhuma publicação real no momento.</p>'; return; }
+    renderFeatured();
+    clearInterval(featuredTimer);
+    featuredTimer = setInterval(() => { featuredIndex = (featuredIndex + 1) % galleryItems.length; renderFeatured(); }, 10000);
+  } catch { wrap.innerHTML = '<p class="empty-state">Nao foi possivel carregar as publicações agora.</p>'; }
 };
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-featured-prev]")) { featuredIndex = (featuredIndex - 1 + galleryItems.length) % galleryItems.length; renderFeatured(); }
+  if (event.target.closest("[data-featured-next]")) { featuredIndex = (featuredIndex + 1) % galleryItems.length; renderFeatured(); }
+  if (event.target.closest("[data-slide-prev]")) openSlide(slideIndex - 1);
+  if (event.target.closest("[data-slide-next]")) openSlide(slideIndex + 1);
+});
+let touchStartX = 0;
+document.addEventListener("touchstart", (event) => { touchStartX = event.changedTouches[0]?.clientX || 0; }, { passive: true });
+document.addEventListener("touchend", (event) => {
+  const delta = (event.changedTouches[0]?.clientX || 0) - touchStartX;
+  if (Math.abs(delta) < 45) return;
+  if (document.querySelector(".modal.open")) openSlide(slideIndex + (delta < 0 ? 1 : -1));
+  else if (event.target.closest("[data-featured-media]")) { featuredIndex = (featuredIndex + (delta < 0 ? 1 : -1) + galleryItems.length) % galleryItems.length; renderFeatured(); }
+}, { passive: true });
+
+const createPendingPublication = (form, seconds = pendingPostSeconds) => {
+  form.querySelector("[data-pending-publication]")?.remove();
+  const panel = document.createElement("div");
+  panel.className = "pending-publication";
+  panel.dataset.pendingPublication = "";
+  panel.innerHTML = `<div class="pending-timer" data-pending-timer>${seconds}s</div><div class="pending-actions"><button class="btn btn-primary" type="button" data-confirm-post>Confirmar postagem</button><button class="btn btn-secondary" type="button" data-cancel-post>Cancelar postagem</button></div><p class="pending-warning">Tempo limite para cancelar a postagem ${seconds}s.</p>`;
+  form.append(panel);
+  return panel;
+};
+const waitForPublicationDecision = (form) => new Promise((resolve) => {
+  const panel = createPendingPublication(form);
+  const timer = panel.querySelector("[data-pending-timer]");
+  const warning = panel.querySelector(".pending-warning");
+  let remaining = pendingPostSeconds;
+  let done = false;
+  const finish = (publish) => { if (done) return; done = true; clearInterval(interval); panel.remove(); resolve(publish); };
+  const interval = setInterval(() => { remaining -= 1; timer.textContent = `${remaining}s`; warning.textContent = `Tempo limite para cancelar a postagem ${remaining}s.`; if (remaining <= 0) finish(true); }, 1000);
+  panel.querySelector("[data-confirm-post]").addEventListener("click", () => finish(true));
+  panel.querySelector("[data-cancel-post]").addEventListener("click", () => finish(false));
+});
+
 const bindMediaForm = () => {
   const form = document.querySelector("[data-media-form]");
   if (!form) return;
-
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!requireSupabase(form)) return;
-
     const submit = form.querySelector("button[type='submit']");
     const files = Array.from(form.media.files || []);
     const guestName = form["guest-name"].value.trim();
     const caption = form.caption.value.trim();
-    const isPublic = form["is-public"].checked;
-
-    if (!files.length) {
-      setStatus(form, "Escolha pelo menos uma foto ou video.", true);
-      return;
-    }
-
+    if (!files.length) { setStatus(form, "Escolha pelo menos uma foto ou video.", true); return; }
     submit.disabled = true;
     setStatus(form, `Enviando backup de ${files.length} arquivo(s)...`);
-
     try {
       const pendingUploads = [];
-
       for (const file of files) {
         const mediaType = file.type.startsWith("video/") ? "video" : "photo";
         const extension = file.name.split(".").pop()?.toLowerCase() || "bin";
         const path = `${mediaType}s/${Date.now()}-${crypto.randomUUID()}.${extension}`;
-        const uploadOptions = {
-          cacheControl: "3600",
-          contentType: file.type,
-          upsert: false
-        };
+        const uploadOptions = { cacheControl: "3600", contentType: file.type, upsert: false };
         const backupPath = `backup/${path}`;
-        const { error: backupUploadError } = await supabase.storage.from(backupBucket).upload(backupPath, file, uploadOptions);
-        if (backupUploadError) throw backupUploadError;
+        const { error } = await supabase.storage.from(backupBucket).upload(backupPath, file, uploadOptions);
+        if (error) throw error;
         pendingUploads.push({ file, mediaType, path, backupPath, uploadOptions });
       }
-
       setStatus(form, "Backup salvo. Confirme para publicar agora ou aguarde 60 segundos.");
-      const shouldPublish = await waitForPublicationDecision(form);
-
-      if (!shouldPublish) {
-        form.reset();
-        setStatus(form, "Postagem cancelada. O backup permanece armazenado para os noivos.");
-        return;
-      }
-
+      if (!(await waitForPublicationDecision(form))) { form.reset(); setStatus(form, "Postagem cancelada. O backup permanece armazenado para os noivos."); return; }
       setStatus(form, `Publicando ${pendingUploads.length} arquivo(s)...`);
-
       for (const pending of pendingUploads) {
         const { file, mediaType, path, backupPath, uploadOptions } = pending;
         const { error: uploadError } = await supabase.storage.from(mediaBucket).upload(path, file, uploadOptions);
         if (uploadError) throw uploadError;
-
         const { data: publicData } = supabase.storage.from(mediaBucket).getPublicUrl(path);
-        const deleteToken = crypto.randomUUID();
-        const { data: insertedMedia, error: insertError } = await supabase.from("wedding_media").insert({
-          guest_name: guestName,
-          caption,
-          file_path: path,
-          backup_file_path: backupPath,
-          public_url: publicData.publicUrl,
-          media_type: mediaType,
-          is_public: isPublic,
-          delete_token: deleteToken
-        }).select("id").single();
+        const { error: insertError } = await supabase.from("wedding_media").insert({ guest_name: guestName, caption, file_path: path, backup_file_path: backupPath, public_url: publicData.publicUrl, media_type: mediaType, is_public: true, device_id: getDeviceId(), device_name: getDeviceName() });
         if (insertError) throw insertError;
-        if (insertedMedia?.id) rememberPostedMediaId(insertedMedia.id, deleteToken);
       }
-
       form.reset();
       setStatus(form, "Momentos enviados com sucesso. Obrigado por compartilhar!");
-    } catch (error) {
-      console.error(error);
-      setStatus(form, "Nao foi possivel enviar agora. Confira a configuracao do Supabase e tente novamente.", true);
-    } finally {
-      submit.disabled = false;
-    }
+    } catch (error) { console.error(error); setStatus(form, "Nao foi possivel enviar agora. Confira a configuracao do Supabase e tente novamente.", true); }
+    finally { submit.disabled = false; }
   });
 };
 
-const bindUserMediaDelete = () => {
-  const gallery = document.querySelector("[data-gallery-grid]");
-  if (!gallery) return;
-
-  gallery.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-delete-user-media]");
-    if (!button || !supabase) return;
-
-    const card = button.closest(".media-card");
-    const id = card?.dataset.id;
-    const filePath = card?.dataset.filePath;
-    const savedMedia = getPostedMediaIds().find((item) => (typeof item === "string" ? item : item.id) === id);
-    const deleteToken = typeof savedMedia === "string" ? "" : savedMedia?.deleteToken;
-    if (!id || !filePath) return;
-    if (!deleteToken) {
-      alert("Somente a postagem criada neste dispositivo pode ser excluida daqui. O backup permanece com os noivos.");
-      return;
-    }
-    if (!confirm("Excluir esta postagem da galeria? O backup permanecera armazenado para os noivos.")) return;
-
-    button.disabled = true;
-    button.textContent = "Excluindo...";
-
-    const authorizedSupabase = createSupabaseWithDeleteToken(deleteToken);
-    const { error: removeError } = await authorizedSupabase.storage.from(mediaBucket).remove([filePath]);
-    if (removeError) {
-      alert("Nao foi possivel excluir o arquivo publico.");
-      button.disabled = false;
-      button.textContent = "Excluir postagem";
-      return;
-    }
-
-    const { error: updateError } = await authorizedSupabase.from("wedding_media").update({ is_public: false, public_url: null }).eq("id", id);
-    if (updateError) {
-      alert("O arquivo saiu do bucket publico, mas nao foi possivel atualizar a listagem.");
-      button.disabled = false;
-      button.textContent = "Excluir postagem";
-      return;
-    }
-
-    forgetPostedMediaId(id);
-    card.remove();
-  });
-};
-
-const createMessageCard = (item) => `<article class="message-card"><p>${escapeHtml(item.message)}</p><footer><strong>${escapeHtml(item.guest_name)}</strong><span>${formatDate(item.created_at)}</span></footer></article>`;
-
+const createMessageCard = (item) => `<article class="message-card" data-message-id="${escapeHtml(item.id || "")}"><p>${escapeHtml(item.message)}</p><footer><strong>${escapeHtml(item.guest_name)}</strong><span>${formatDate(item.created_at)}</span></footer></article>`;
 const loadMessages = async () => {
-  const wall = document.querySelector("[data-messages-wall]");
+  const wall = document.querySelector("[data-messages-wall], [data-main-messages]");
   if (!wall || !supabase) return;
-
-  const { data, error } = await supabase
-    .from("wedding_messages")
-    .select("guest_name, message, created_at")
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    wall.insertAdjacentHTML("beforebegin", `<p class="empty-state">Nao foi possivel carregar os recados agora.</p>`);
-    return;
-  }
-
-  if (data?.length) wall.innerHTML = data.map(createMessageCard).join("");
+  const { data, error } = await supabase.from("wedding_messages").select("id, guest_name, message, created_at").order("created_at", { ascending: false }).limit(wall.matches("[data-main-messages]") ? 3 : 100);
+  if (error) { wall.insertAdjacentHTML("beforebegin", '<p class="empty-state">Nao foi possivel carregar os recados agora.</p>'); return; }
+  wall.innerHTML = data?.length ? data.map(createMessageCard).join("") : '<p class="empty-state">Nenhum recado real no momento.</p>';
 };
-
 const bindMessageForm = () => {
   const form = document.querySelector("[data-message-form]");
   if (!form) return;
-
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!requireSupabase(form)) return;
-
     const submit = form.querySelector("button[type='submit']");
     submit.disabled = true;
     setStatus(form, "Enviando recado...");
-
-    const { error } = await supabase.from("wedding_messages").insert({
-      guest_name: form.name.value.trim(),
-      message: form.message.value.trim()
-    });
-
+    const { error } = await supabase.from("wedding_messages").insert({ guest_name: form.name.value.trim(), message: form.message.value.trim(), device_id: getDeviceId(), device_name: getDeviceName() });
     submit.disabled = false;
-    if (error) {
-      console.error(error);
-      setStatus(form, "Nao foi possivel enviar o recado agora.", true);
-      return;
-    }
-
-    form.reset();
-    setStatus(form, "Recado enviado com carinho.");
-    await loadMessages();
+    if (error) { console.error(error); setStatus(form, "Nao foi possivel enviar o recado agora.", true); return; }
+    form.reset(); setStatus(form, "Recado enviado com carinho."); await loadMessages();
   });
 };
 
-document.querySelectorAll("[data-close-modal]").forEach((button) => {
-  button.addEventListener("click", () => document.querySelector(".modal")?.classList.remove("open"));
-});
-
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") document.querySelector(".modal")?.classList.remove("open");
-});
-
-const heroCarousel = document.querySelector(".hero-carousel");
-
-if (heroCarousel) {
-  const slides = Array.from(heroCarousel.querySelectorAll(".hero-carousel-slide"));
-  const previousButton = heroCarousel.querySelector(".hero-carousel-prev");
-  const nextButton = heroCarousel.querySelector(".hero-carousel-next");
-  const dotsContainer = heroCarousel.querySelector(".hero-carousel-dots");
-  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  let currentIndex = slides.findIndex((slide) => slide.classList.contains("is-active"));
-  let autoplayTimer;
-
-  if (currentIndex < 0) currentIndex = 0;
-
-  const updateCarousel = () => {
-    slides.forEach((slide, index) => {
-      slide.classList.toggle("is-active", index === currentIndex);
-      slide.classList.toggle("is-prev", index === (currentIndex - 1 + slides.length) % slides.length);
-      slide.classList.toggle("is-next", index === (currentIndex + 1) % slides.length);
-    });
-
-    dotsContainer?.querySelectorAll(".hero-carousel-dot").forEach((dot, index) => {
-      dot.classList.toggle("is-active", index === currentIndex);
-      dot.setAttribute("aria-current", index === currentIndex ? "true" : "false");
-    });
-  };
-
-  const stopAutoplay = () => window.clearInterval(autoplayTimer);
-  const startAutoplay = () => {
-    stopAutoplay();
-    if (!reduceMotion.matches && slides.length > 1) {
-      autoplayTimer = window.setInterval(() => {
-        currentIndex = (currentIndex + 1) % slides.length;
-        updateCarousel();
-      }, 4500);
-    }
-  };
-
-  slides.forEach((_, index) => {
-    const dot = document.createElement("button");
-    dot.className = "hero-carousel-dot";
-    dot.type = "button";
-    dot.setAttribute("aria-label", `Mostrar foto ${index + 1}`);
-    dot.addEventListener("click", () => {
-      currentIndex = index;
-      updateCarousel();
-      stopAutoplay();
-    });
-    dotsContainer?.append(dot);
-  });
-
-  previousButton?.addEventListener("click", () => {
-    currentIndex = (currentIndex - 1 + slides.length) % slides.length;
-    updateCarousel();
-    stopAutoplay();
-  });
-
-  nextButton?.addEventListener("click", () => {
-    currentIndex = (currentIndex + 1) % slides.length;
-    updateCarousel();
-    stopAutoplay();
-  });
-
-  heroCarousel.addEventListener("mouseenter", stopAutoplay);
-  heroCarousel.addEventListener("mouseleave", startAutoplay);
-  heroCarousel.addEventListener("focusin", stopAutoplay);
-  heroCarousel.addEventListener("touchstart", stopAutoplay, { passive: true });
-  reduceMotion.addEventListener?.("change", startAutoplay);
-
-  updateCarousel();
-  startAutoplay();
-}
-
-bindGalleryFilters();
-bindGalleryModal();
-bindMediaForm();
-bindUserMediaDelete();
-bindMessageForm();
-loadGallery();
-loadPreviewMosaic();
-loadMessages();
+document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", () => document.querySelector(".modal")?.classList.remove("open")));
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") document.querySelector(".modal")?.classList.remove("open"); });
 
 const createAdminMediaItem = (item) => {
   const isVideo = item.media_type === "video";
-  const preview = isVideo
-    ? `<video src="${escapeHtml(item.public_url)}" preload="metadata" muted playsinline></video>`
-    : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
-
-  return `<article class="admin-item" data-id="${item.id}" data-file-path="${escapeHtml(item.file_path)}">
-    ${preview}
-    <div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Sem legenda")}</p><small>${formatDate(item.created_at)} · ${isVideo ? "Video" : "Foto"}</small></div>
-    <div class="admin-actions"><button class="btn btn-secondary" type="button" data-download-media data-download-url="${escapeHtml(item.public_url)}">Baixar</button><button class="btn btn-secondary" type="button" data-delete-media>Excluir da visualizacao</button></div>
-  </article>`;
+  const preview = isVideo ? `<video src="${escapeHtml(item.public_url)}" preload="metadata" muted playsinline></video>` : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
+  return `<article class="admin-item" data-id="${item.id}" data-file-path="${escapeHtml(item.file_path)}" data-backup-file-path="${escapeHtml(item.backup_file_path || "")}">${preview}<div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Sem legenda")}</p><small>${formatDate(item.created_at)} · ${isVideo ? "Video" : "Foto"}<br>ID aparelho: ${escapeHtml(item.device_id || "Nao registrado")}<br>Aparelho: ${escapeHtml(item.device_name || "Nao registrado")}</small></div><div class="admin-actions"><button class="btn btn-secondary" type="button" data-download-media data-download-url="${escapeHtml(item.public_url)}">Baixar</button><button class="btn btn-secondary" type="button" data-delete-site-media>Excluir bucket Site</button><button class="btn btn-secondary" type="button" data-delete-backup-media>Excluir backup</button><button class="btn btn-secondary btn-danger" type="button" data-delete-both-media>Excluir ambos</button></div></article>`;
 };
-
-const createAdminMessageItem = (item) => `<article class="admin-item" data-id="${item.id}">
-  <div></div>
-  <div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.message)}</p><small>${formatDate(item.created_at)}</small></div>
-  <button class="btn btn-secondary" type="button" data-delete-message>Excluir texto</button>
-</article>`;
-
+const createAdminMessageItem = (item) => `<article class="admin-item" data-id="${item.id}"><div></div><div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.message)}</p><small>${formatDate(item.created_at)}<br>ID aparelho: ${escapeHtml(item.device_id || "Nao registrado")}<br>Aparelho: ${escapeHtml(item.device_name || "Nao registrado")}</small></div><button class="btn btn-secondary" type="button" data-delete-message>Excluir texto</button></article>`;
 const loadAdminContent = async () => {
   const mediaList = document.querySelector("[data-admin-media]");
   const messageList = document.querySelector("[data-admin-messages]");
   if (!mediaList || !messageList || !supabase) return;
-
   const [{ data: media, error: mediaError }, { data: messages, error: messagesError }] = await Promise.all([
-    supabase.from("wedding_media").select("id, guest_name, caption, file_path, public_url, media_type, created_at").eq("is_public", true).order("created_at", { ascending: false }),
-    supabase.from("wedding_messages").select("id, guest_name, message, created_at").order("created_at", { ascending: false })
+    supabase.from("wedding_media").select("id, guest_name, caption, file_path, backup_file_path, public_url, media_type, created_at, device_id, device_name").order("created_at", { ascending: false }),
+    supabase.from("wedding_messages").select("id, guest_name, message, created_at, device_id, device_name").order("created_at", { ascending: false })
   ]);
-
-  if (mediaError) mediaList.innerHTML = '<p class="admin-empty">Nao foi possivel carregar as midias.</p>';
-  else mediaList.innerHTML = media?.length ? media.map(createAdminMediaItem).join("") : '<p class="admin-empty">Nenhuma midia publica no momento.</p>';
-
-  if (messagesError) messageList.innerHTML = '<p class="admin-empty">Nao foi possivel carregar os recados.</p>';
-  else messageList.innerHTML = messages?.length ? messages.map(createAdminMessageItem).join("") : '<p class="admin-empty">Nenhum recado no momento.</p>';
+  mediaList.innerHTML = mediaError ? '<p class="admin-empty">Nao foi possivel carregar as midias.</p>' : (media?.length ? media.map(createAdminMediaItem).join("") : '<p class="admin-empty">Nenhuma midia no momento.</p>');
+  messageList.innerHTML = messagesError ? '<p class="admin-empty">Nao foi possivel carregar os recados.</p>' : (messages?.length ? messages.map(createAdminMessageItem).join("") : '<p class="admin-empty">Nenhum recado no momento.</p>');
 };
-
 const bindAdmin = () => {
   const login = document.querySelector("[data-admin-login]");
   const dashboard = document.querySelector("[data-admin-dashboard]");
   const loginForm = document.querySelector("[data-admin-login-form]");
   if (!login || !dashboard || !loginForm) return;
-
-  const showDashboard = async () => {
-    login.hidden = true;
-    dashboard.hidden = false;
-    await loadAdminContent();
-  };
-
+  const showDashboard = async () => { login.hidden = true; dashboard.hidden = false; await loadAdminContent(); };
   if (sessionStorage.getItem("weddingAdmin") === "true") showDashboard();
-
   loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!requireSupabase(loginForm)) return;
-
-    const loginValue = loginForm.login.value.trim();
-    const passwordValue = loginForm.password.value;
-
-    if (loginValue !== "noivos" || passwordValue !== "331656") {
-      setStatus(loginForm, "Login ou senha incorretos.", true);
-      return;
-    }
-
-    sessionStorage.setItem("weddingAdmin", "true");
-    setStatus(loginForm, "Acesso liberado.");
-    await showDashboard();
+    if (loginForm.login.value.trim() !== "noivos" || loginForm.password.value !== "331656") { setStatus(loginForm, "Login ou senha incorretos.", true); return; }
+    sessionStorage.setItem("weddingAdmin", "true"); setStatus(loginForm, "Acesso liberado."); await showDashboard();
   });
-
-  document.querySelector("[data-admin-signout]")?.addEventListener("click", () => {
-    sessionStorage.removeItem("weddingAdmin");
-    dashboard.hidden = true;
-    login.hidden = false;
-  });
-
+  document.querySelector("[data-admin-signout]")?.addEventListener("click", () => { sessionStorage.removeItem("weddingAdmin"); dashboard.hidden = true; login.hidden = false; });
   dashboard.addEventListener("click", async (event) => {
-    const downloadButton = event.target.closest("[data-download-media]");
-    const mediaButton = event.target.closest("[data-delete-media]");
-    const messageButton = event.target.closest("[data-delete-message]");
-
-    if (downloadButton) {
-      const item = downloadButton.closest(".admin-item");
-      const url = downloadButton.dataset.downloadUrl;
-      const fileName = item.dataset.filePath?.split("/").pop() || "momento-casamento";
-      downloadButton.disabled = true;
-
-      try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error("Download failed");
-        const blob = await response.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = objectUrl;
-        link.download = fileName;
-        document.body.append(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(objectUrl);
-      } catch (error) {
-        console.error(error);
-        alert("Nao foi possivel iniciar o download automaticamente.");
-      } finally {
-        downloadButton.disabled = false;
-      }
+    const item = event.target.closest(".admin-item");
+    if (!item) return;
+    const filePath = item.dataset.filePath;
+    const backupPath = item.dataset.backupFilePath;
+    const id = item.dataset.id;
+    if (event.target.closest("[data-download-media]")) { window.open(event.target.closest("[data-download-media]").dataset.downloadUrl, "_blank", "noopener"); return; }
+    if (event.target.closest("[data-delete-site-media], [data-delete-backup-media], [data-delete-both-media]")) {
+      const delSite = Boolean(event.target.closest("[data-delete-site-media], [data-delete-both-media]"));
+      const delBackup = Boolean(event.target.closest("[data-delete-backup-media], [data-delete-both-media]"));
+      if (!confirm("Confirmar exclusao selecionada?")) return;
+      if (delSite && filePath) await supabase.storage.from(mediaBucket).remove([filePath]);
+      if (delBackup && backupPath) await supabase.storage.from(backupBucket).remove([backupPath]);
+      const update = delSite ? { is_public: false, public_url: null } : {};
+      if (delBackup) update.backup_file_path = null;
+      await supabase.from("wedding_media").update(update).eq("id", id);
+      await loadAdminContent();
       return;
     }
-
-    if (mediaButton) {
-      const item = mediaButton.closest(".admin-item");
-      mediaButton.disabled = true;
-      const filePath = item.dataset.filePath;
-      const id = item.dataset.id;
-      const { error: removeError } = await supabase.storage.from(mediaBucket).remove([filePath]);
-      if (removeError) {
-        alert("Nao foi possivel excluir o arquivo publico.");
-        mediaButton.disabled = false;
-        return;
-      }
-      const { error: updateError } = await supabase.from("wedding_media").update({ is_public: false, public_url: null }).eq("id", id);
-      if (updateError) {
-        alert("O arquivo saiu do bucket publico, mas nao foi possivel atualizar a listagem.");
-        mediaButton.disabled = false;
-        return;
-      }
-      item.remove();
-      return;
-    }
-
-    if (messageButton) {
-      const item = messageButton.closest(".admin-item");
-      messageButton.disabled = true;
-      const { error } = await supabase.from("wedding_messages").delete().eq("id", item.dataset.id);
-      if (error) {
-        alert("Nao foi possivel excluir o texto.");
-        messageButton.disabled = false;
-        return;
-      }
-      item.remove();
-    }
+    if (event.target.closest("[data-delete-message]")) { if (!confirm("Excluir este texto?")) return; await supabase.from("wedding_messages").delete().eq("id", id); item.remove(); }
   });
 };
 
+bindGalleryFilters();
+bindGalleryModal();
+bindMediaForm();
+bindMessageForm();
+bindPostActions();
+loadGallery();
+loadPreviewMosaic();
+loadMessages();
 bindAdmin();
-
-
-
