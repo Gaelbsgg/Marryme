@@ -405,25 +405,27 @@ const bindAdmin = () => {
     await loadAdminContent();
   };
 
-  supabase?.auth.getSession().then(({ data }) => {
-    if (data.session) showDashboard();
-  });
+  if (sessionStorage.getItem("weddingAdmin") === "true") showDashboard();
 
   loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!requireSupabase(loginForm)) return;
 
-    const email = loginForm.email.value.trim();
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: `${window.location.origin}${window.location.pathname}` }
-    });
+    const loginValue = loginForm.login.value.trim();
+    const passwordValue = loginForm.password.value;
 
-    setStatus(loginForm, error ? "Nao foi possivel enviar o link de acesso." : "Enviamos um link magico para o seu e-mail.", Boolean(error));
+    if (loginValue !== "noivos" || passwordValue !== "331656") {
+      setStatus(loginForm, "Login ou senha incorretos.", true);
+      return;
+    }
+
+    sessionStorage.setItem("weddingAdmin", "true");
+    setStatus(loginForm, "Acesso liberado.");
+    await showDashboard();
   });
 
-  document.querySelector("[data-admin-signout]")?.addEventListener("click", async () => {
-    await supabase.auth.signOut();
+  document.querySelector("[data-admin-signout]")?.addEventListener("click", () => {
+    sessionStorage.removeItem("weddingAdmin");
     dashboard.hidden = true;
     login.hidden = false;
   });
