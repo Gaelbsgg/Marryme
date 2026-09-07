@@ -56,6 +56,19 @@ const createMediaCard = (item) => {
   </article>`;
 };
 
+const createPreviewItem = (item, index) => {
+  const label = escapeHtml(item.caption || "Momento compartilhado");
+  const url = escapeHtml(item.public_url);
+
+  if (item.media_type === "video") {
+    return `<figure>
+      <video src="${url}" preload="metadata" muted playsinline aria-label="${label}"></video>
+      <figcaption>▶</figcaption>
+    </figure>`;
+  }
+
+  return `<img loading="${index === 0 ? "eager" : "lazy"}" src="${url}" alt="${label}"/>`;
+};
 const bindGalleryFilters = () => {
   document.querySelectorAll(".filter-btn").forEach((button) => {
     button.addEventListener("click", () => {
@@ -120,6 +133,29 @@ const loadGallery = async () => {
   bindGalleryModal();
 };
 
+const loadPreviewMosaic = async () => {
+  const mosaic = document.querySelector("[data-preview-mosaic]");
+  if (!mosaic || !supabase) return;
+
+  const { data, error } = await supabase
+    .from("wedding_media")
+    .select("caption, public_url, media_type, created_at")
+    .eq("is_public", true)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  if (data?.length) {
+    mosaic.innerHTML = data.map(createPreviewItem).join("");
+    return;
+  }
+
+  mosaic.remove();
+};
 const bindMediaForm = () => {
   const form = document.querySelector("[data-media-form]");
   if (!form) return;
@@ -311,4 +347,5 @@ bindGalleryModal();
 bindMediaForm();
 bindMessageForm();
 loadGallery();
+loadPreviewMosaic();
 loadMessages();
