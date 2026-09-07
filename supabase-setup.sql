@@ -5,7 +5,8 @@ create table if not exists public.wedding_media (
   guest_name text not null,
   caption text,
   file_path text not null,
-  public_url text not null,
+  public_url text,
+  backup_file_path text,
   media_type text not null check (media_type in ('photo', 'video')),
   is_public boolean not null default true,
   created_at timestamptz not null default now()
@@ -22,13 +23,21 @@ alter table public.wedding_media enable row level security;
 alter table public.wedding_messages enable row level security;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values (
-  'wedding-media',
-  'wedding-media',
-  true,
-  104857600,
-  array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/quicktime', 'video/webm']
-)
+values
+  (
+    'wedding-media',
+    'wedding-media',
+    true,
+    104857600,
+    array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/quicktime', 'video/webm']
+  ),
+  (
+    'wedding-media-backup',
+    'wedding-media-backup',
+    false,
+    104857600,
+    array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/quicktime', 'video/webm']
+  )
 on conflict (id) do update
 set
   public = excluded.public,
@@ -76,9 +85,57 @@ for insert
 to anon, authenticated
 with check (bucket_id = 'wedding-media');
 
+drop policy if exists "Anyone can upload wedding backup files" on storage.objects;
+create policy "Anyone can upload wedding backup files"
+on storage.objects
+for insert
+to anon, authenticated
+with check (bucket_id = 'wedding-media-backup');
+
 drop policy if exists "Anyone can read wedding files" on storage.objects;
 create policy "Anyone can read wedding files"
 on storage.objects
 for select
 to anon, authenticated
 using (bucket_id = 'wedding-media');
+
+
+alter table public.wedding_media add column if not exists backup_file_path text;
+alter table public.wedding_media alter column public_url drop not null;
+
+create or replace function public.is_wedding_admin()
+returns boolean
+language sql
+stable
+as $$
+  select coalesce((select auth.jwt() ->> 'email'), '') in ('SEU_EMAIL_ADMIN_AQUI');
+$$;
+
+drop policy if exists "Admin can view all wedding media" on public.wedding_media;
+create policy "Admin can view all wedding media"
+on public.wedding_media
+for select
+to authenticated
+using (public.is_wedding_admin());
+
+drop policy if exists "Admin can hide wedding media" on public.wedding_media;
+create policy "Admin can hide wedding media"
+on public.wedding_media
+for update
+to authenticated
+using (public.is_wedding_admin())
+with check (public.is_wedding_admin());
+
+drop policy if exists "Admin can delete wedding messages" on public.wedding_messages;
+create policy "Admin can delete wedding messages"
+on public.wedding_messages
+for delete
+to authenticated
+using (public.is_wedding_admin());
+
+drop policy if exists "Admin can delete public wedding files" on storage.objects;
+create policy "Admin can delete public wedding files"
+on storage.objects
+for delete
+to authenticated
+using (bucket_id = 'wedding-media' and public.is_wedding_admin());

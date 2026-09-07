@@ -4,6 +4,7 @@ const config = window.SUPABASE_CONFIG || {};
 const isConfigured = Boolean(config.url && config.anonKey && !config.url.includes("SEU-PROJETO") && !config.anonKey.includes("SUA_CHAVE"));
 const supabase = isConfigured ? createClient(config.url, config.anonKey) : null;
 const mediaBucket = config.mediaBucket || "wedding-media";
+const backupBucket = config.backupBucket || "wedding-media-backup";
 
 const revealItems = document.querySelectorAll(".reveal");
 
@@ -40,7 +41,7 @@ const setStatus = (form, message, isError = false) => {
 
 const requireSupabase = (form) => {
   if (supabase) return true;
-  setStatus(form, "Configure o arquivo supabase-config.js com a URL e a chave pública do Supabase.", true);
+  setStatus(form, "Configure o arquivo supabase-config.js com a URL e a chave publica do Supabase.", true);
   return false;
 };
 
@@ -183,11 +184,16 @@ const bindMediaForm = () => {
         const mediaType = file.type.startsWith("video/") ? "video" : "photo";
         const extension = file.name.split(".").pop()?.toLowerCase() || "bin";
         const path = `${mediaType}s/${Date.now()}-${crypto.randomUUID()}.${extension}`;
-        const { error: uploadError } = await supabase.storage.from(mediaBucket).upload(path, file, {
+        const uploadOptions = {
           cacheControl: "3600",
           contentType: file.type,
           upsert: false
-        });
+        };
+        const backupPath = `backup/${path}`;
+        const { error: backupUploadError } = await supabase.storage.from(backupBucket).upload(backupPath, file, uploadOptions);
+        if (backupUploadError) throw backupUploadError;
+
+        const { error: uploadError } = await supabase.storage.from(mediaBucket).upload(path, file, uploadOptions);
         if (uploadError) throw uploadError;
 
         const { data: publicData } = supabase.storage.from(mediaBucket).getPublicUrl(path);
@@ -195,6 +201,7 @@ const bindMediaForm = () => {
           guest_name: guestName,
           caption,
           file_path: path,
+          backup_file_path: backupPath,
           public_url: publicData.publicUrl,
           media_type: mediaType,
           is_public: isPublic
@@ -349,3 +356,115 @@ bindMessageForm();
 loadGallery();
 loadPreviewMosaic();
 loadMessages();
+
+const createAdminMediaItem = (item) => {
+  const isVideo = item.media_type === "video";
+  const preview = isVideo
+    ? `<video src="${escapeHtml(item.public_url)}" preload="metadata" muted playsinline></video>`
+    : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
+
+  return `<article class="admin-item" data-id="${item.id}" data-file-path="${escapeHtml(item.file_path)}">
+    ${preview}
+    <div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Sem legenda")}</p><small>${formatDate(item.created_at)} · ${isVideo ? "Video" : "Foto"}</small></div>
+    <button class="btn btn-secondary" type="button" data-delete-media>Excluir da visualizacao</button>
+  </article>`;
+};
+
+const createAdminMessageItem = (item) => `<article class="admin-item" data-id="${item.id}">
+  <div></div>
+  <div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.message)}</p><small>${formatDate(item.created_at)}</small></div>
+  <button class="btn btn-secondary" type="button" data-delete-message>Excluir texto</button>
+</article>`;
+
+const loadAdminContent = async () => {
+  const mediaList = document.querySelector("[data-admin-media]");
+  const messageList = document.querySelector("[data-admin-messages]");
+  if (!mediaList || !messageList || !supabase) return;
+
+  const [{ data: media, error: mediaError }, { data: messages, error: messagesError }] = await Promise.all([
+    supabase.from("wedding_media").select("id, guest_name, caption, file_path, public_url, media_type, created_at").eq("is_public", true).order("created_at", { ascending: false }),
+    supabase.from("wedding_messages").select("id, guest_name, message, created_at").order("created_at", { ascending: false })
+  ]);
+
+  if (mediaError) mediaList.innerHTML = '<p class="admin-empty">Nao foi possivel carregar as midias.</p>';
+  else mediaList.innerHTML = media?.length ? media.map(createAdminMediaItem).join("") : '<p class="admin-empty">Nenhuma midia publica no momento.</p>';
+
+  if (messagesError) messageList.innerHTML = '<p class="admin-empty">Nao foi possivel carregar os recados.</p>';
+  else messageList.innerHTML = messages?.length ? messages.map(createAdminMessageItem).join("") : '<p class="admin-empty">Nenhum recado no momento.</p>';
+};
+
+const bindAdmin = () => {
+  const login = document.querySelector("[data-admin-login]");
+  const dashboard = document.querySelector("[data-admin-dashboard]");
+  const loginForm = document.querySelector("[data-admin-login-form]");
+  if (!login || !dashboard || !loginForm) return;
+
+  const showDashboard = async () => {
+    login.hidden = true;
+    dashboard.hidden = false;
+    await loadAdminContent();
+  };
+
+  supabase?.auth.getSession().then(({ data }) => {
+    if (data.session) showDashboard();
+  });
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!requireSupabase(loginForm)) return;
+
+    const email = loginForm.email.value.trim();
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: `${window.location.origin}${window.location.pathname}` }
+    });
+
+    setStatus(loginForm, error ? "Nao foi possivel enviar o link de acesso." : "Enviamos um link magico para o seu e-mail.", Boolean(error));
+  });
+
+  document.querySelector("[data-admin-signout]")?.addEventListener("click", async () => {
+    await supabase.auth.signOut();
+    dashboard.hidden = true;
+    login.hidden = false;
+  });
+
+  dashboard.addEventListener("click", async (event) => {
+    const mediaButton = event.target.closest("[data-delete-media]");
+    const messageButton = event.target.closest("[data-delete-message]");
+
+    if (mediaButton) {
+      const item = mediaButton.closest(".admin-item");
+      mediaButton.disabled = true;
+      const filePath = item.dataset.filePath;
+      const id = item.dataset.id;
+      const { error: removeError } = await supabase.storage.from(mediaBucket).remove([filePath]);
+      if (removeError) {
+        alert("Nao foi possivel excluir o arquivo publico.");
+        mediaButton.disabled = false;
+        return;
+      }
+      const { error: updateError } = await supabase.from("wedding_media").update({ is_public: false, public_url: null }).eq("id", id);
+      if (updateError) {
+        alert("O arquivo saiu do bucket publico, mas nao foi possivel atualizar a listagem.");
+        mediaButton.disabled = false;
+        return;
+      }
+      item.remove();
+      return;
+    }
+
+    if (messageButton) {
+      const item = messageButton.closest(".admin-item");
+      messageButton.disabled = true;
+      const { error } = await supabase.from("wedding_messages").delete().eq("id", item.dataset.id);
+      if (error) {
+        alert("Nao foi possivel excluir o texto.");
+        messageButton.disabled = false;
+        return;
+      }
+      item.remove();
+    }
+  });
+};
+
+bindAdmin();
