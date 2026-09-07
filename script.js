@@ -366,7 +366,7 @@ const createAdminMediaItem = (item) => {
   return `<article class="admin-item" data-id="${item.id}" data-file-path="${escapeHtml(item.file_path)}">
     ${preview}
     <div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Sem legenda")}</p><small>${formatDate(item.created_at)} · ${isVideo ? "Video" : "Foto"}</small></div>
-    <div class="admin-actions"><a class="btn btn-secondary" href="${escapeHtml(item.public_url)}" download target="_blank" rel="noopener noreferrer">Baixar</a><button class="btn btn-secondary" type="button" data-delete-media>Excluir da visualizacao</button></div>
+    <div class="admin-actions"><button class="btn btn-secondary" type="button" data-download-media data-download-url="${escapeHtml(item.public_url)}">Baixar</button><button class="btn btn-secondary" type="button" data-delete-media>Excluir da visualizacao</button></div>
   </article>`;
 };
 
@@ -431,8 +431,36 @@ const bindAdmin = () => {
   });
 
   dashboard.addEventListener("click", async (event) => {
+    const downloadButton = event.target.closest("[data-download-media]");
     const mediaButton = event.target.closest("[data-delete-media]");
     const messageButton = event.target.closest("[data-delete-message]");
+
+    if (downloadButton) {
+      const item = downloadButton.closest(".admin-item");
+      const url = downloadButton.dataset.downloadUrl;
+      const fileName = item.dataset.filePath?.split("/").pop() || "momento-casamento";
+      downloadButton.disabled = true;
+
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("Download failed");
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.download = fileName;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(objectUrl);
+      } catch (error) {
+        console.error(error);
+        alert("Nao foi possivel iniciar o download automaticamente.");
+      } finally {
+        downloadButton.disabled = false;
+      }
+      return;
+    }
 
     if (mediaButton) {
       const item = mediaButton.closest(".admin-item");
