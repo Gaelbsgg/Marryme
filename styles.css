@@ -18,16 +18,4 @@
 /* Visibility repair */
 .hero{align-content:start;padding-top:118px;gap:22px;color:var(--color-navy)}.hero-content{position:relative;z-index:6;opacity:1!important;transform:none!important;margin-top:4px;padding-bottom:34px}.hero-content h1,.hero-content .names,.hero-content .hero-text,.hero-content .hero-line{display:block;visibility:visible;opacity:1;color:var(--color-navy)}.hero-content .names{color:#000}.hero-content h1{color:var(--color-olive)}.hero-carousel-btn,.featured-nav,.slide-nav{display:none!important}.hero-carousel{margin:0 auto 10px}.section-heading,.featured-media,.message-grid,.gallery-grid,.post-stats,.media-card-actions{opacity:1!important;visibility:visible}.post-icon{color:var(--color-navy);background:#fff}.post-icon svg{display:block;pointer-events:none}.featured-info,.media-card>div{color:var(--color-navy);background:#fff}.featured-info strong,.media-card strong{color:var(--color-navy)}.featured-info p,.media-card p{color:var(--color-navy-soft)}@media (max-width:520px){.hero{padding-top:104px;gap:16px}.hero-carousel{height:clamp(128px,40vw,180px)}.hero-content h1{font-size:clamp(2.1rem,12vw,3.1rem)}}
 
-/* Global text contrast repair */
-:root{--color-text:#34475a;--color-muted:rgba(52,71,90,.76)}
-body,main,section,.container,.page-hero,.welcome-message,.gallery-preview,.message-preview,.upload-panel,.admin-panel,.message-card,.media-card,.featured-info,.admin-item,.analytics-card,.filters,label,input,textarea{color:var(--color-text)!important}
-p,small,.hero-text,.hero-line,.section-heading p,.message-card p,.media-card p,.featured-info p,.admin-item p,.admin-item small,.analytics-card p,.comment-item small,.empty-state,.form-status{color:var(--color-muted)!important}
-h1,h2,h3,strong,.names,.brand,.header-links a,.filter-btn,.btn-secondary,.post-icon,.comment-like{color:var(--color-text)!important}
-.date,.eyebrow,.hero-content h1{color:var(--color-olive)!important}
-.btn-primary,.header-cta,.btn-primary *, .header-cta *{color:#fff!important}
-.wedding-footer,.wedding-footer p,.wedding-footer a,.couple-message,.couple-message h2,.couple-message p,.couple-message .signature,.couple-message .signature span{color:var(--color-white-soft)!important}
-.wedding-footer a,.couple-message h2,.couple-message .signature{color:#fff!important}
-.slide-modal .modal-content h2,.slide-modal .modal-content p,.slide-modal .modal-close{color:#fff!important}
-.post-icon.active,.like-icon.active,.like-icon:hover,.post-icon.is-confirmed,.post-icon:hover{color:#fff!important}
-input::placeholder,textarea::placeholder{color:rgba(52,71,90,.48)!important}
-.reveal{opacity:1!important;transform:none!important}
+
