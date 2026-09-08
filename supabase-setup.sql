@@ -26,7 +26,7 @@ create table if not exists public.wedding_messages (
 create table if not exists public.wedding_media_engagement (
   id uuid primary key default gen_random_uuid(),
   media_id uuid not null references public.wedding_media(id) on delete cascade,
-  action text not null check (action in ('like', 'share', 'download', 'comment')),
+  action text not null check (action in ('like', 'share', 'download', 'comment', 'comment_like')),
   device_id text not null,
   device_name text,
   value text,
@@ -90,7 +90,7 @@ drop policy if exists "Anyone can view media engagement" on public.wedding_media
 create policy "Anyone can view media engagement" on public.wedding_media_engagement for select to anon, authenticated using (true);
 
 drop policy if exists "Anyone can add media engagement" on public.wedding_media_engagement;
-create policy "Anyone can add media engagement" on public.wedding_media_engagement for insert to anon, authenticated with check (device_id is not null and action in ('like', 'share', 'download', 'comment'));
+create policy "Anyone can add media engagement" on public.wedding_media_engagement for insert to anon, authenticated with check (device_id is not null and action in ('like', 'share', 'download', 'comment', 'comment_like'));
 
 drop policy if exists "Device can remove own media like" on public.wedding_media_engagement;
 create policy "Device can remove own media like" on public.wedding_media_engagement for delete to anon, authenticated using (action = 'like');
@@ -116,7 +116,7 @@ drop policy if exists "Uploader can delete own public wedding files" on storage.
 create table if not exists public.wedding_message_engagement (
   id uuid primary key default gen_random_uuid(),
   message_id uuid not null references public.wedding_messages(id) on delete cascade,
-  action text not null check (action in ('like', 'share', 'comment')),
+  action text not null check (action in ('like', 'share', 'comment', 'comment_like')),
   device_id text not null,
   device_name text,
   value text,
@@ -133,7 +133,8 @@ drop policy if exists "Anyone can view message engagement" on public.wedding_mes
 create policy "Anyone can view message engagement" on public.wedding_message_engagement for select to anon, authenticated using (true);
 
 drop policy if exists "Anyone can add message engagement" on public.wedding_message_engagement;
-create policy "Anyone can add message engagement" on public.wedding_message_engagement for insert to anon, authenticated with check (device_id is not null and action in ('like', 'share', 'comment'));
+create policy "Anyone can add message engagement" on public.wedding_message_engagement for insert to anon, authenticated with check (device_id is not null and action in ('like', 'share', 'comment', 'comment_like'));
 
 drop policy if exists "Device can remove own message like" on public.wedding_message_engagement;
 create policy "Device can remove own message like" on public.wedding_message_engagement for delete to anon, authenticated using (action = 'like');
+
