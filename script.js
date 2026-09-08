@@ -1,10 +1,8 @@
-﻿import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
-
-document.documentElement.classList.add("js-ready");
+﻿document.documentElement.classList.add("js-ready");
 
 const config = window.SUPABASE_CONFIG || {};
 const isConfigured = Boolean(config.url && config.anonKey && !config.url.includes("SEU-PROJETO") && !config.anonKey.includes("SUA_CHAVE"));
-const supabase = isConfigured ? createClient(config.url, config.anonKey) : null;
+const supabase = isConfigured && window.supabase?.createClient ? window.supabase.createClient(config.url, config.anonKey) : null;
 const mediaBucket = config.mediaBucket || "wedding-media";
 const backupBucket = config.backupBucket || "wedding-media-backup";
 const pendingPostSeconds = 60;
@@ -67,17 +65,23 @@ const getEngagement = async (mediaIds = []) => {
   }, {});
 };
 
+const postIcons = {
+  like: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78Z"/></svg>',
+  share: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51 8.59 10.49"/></svg>',
+  download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>',
+  comment: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>'
+};
+
 const createStatsHtml = (item) => {
   const stats = item.stats || { like: 0, share: 0, download: 0, comment: 0 };
   return `<div class="post-stats" data-media-id="${escapeHtml(item.id)}">
-    <button class="post-icon ${isLiked(item.id) ? "active" : ""}" type="button" data-like-media aria-label="Curtir">♡</button><span data-like-count>${stats.like || 0}</span>
-    <button class="post-icon" type="button" data-share-media aria-label="Compartilhar">↗</button><span data-share-count>${stats.share || 0}</span>
-    <button class="post-icon" type="button" data-download-media-public aria-label="Baixar">↓</button><span data-download-count>${stats.download || 0}</span>
-    <button class="post-icon" type="button" data-toggle-comments aria-label="Comentarios">☰</button><span data-comment-count>${stats.comment || 0}</span>
+    <button class="post-icon ${isLiked(item.id) ? "active" : ""}" type="button" data-like-media aria-label="Curtir">${postIcons.like}</button><span data-like-count>${stats.like || 0}</span>
+    <button class="post-icon" type="button" data-share-media aria-label="Compartilhar">${postIcons.share}</button><span data-share-count>${stats.share || 0}</span>
+    <button class="post-icon" type="button" data-download-media-public aria-label="Baixar">${postIcons.download}</button><span data-download-count>${stats.download || 0}</span>
+    <button class="post-icon" type="button" data-toggle-comments aria-label="Comentários">${postIcons.comment}</button><span data-comment-count>${stats.comment || 0}</span>
   </div>
   <form class="comment-form" data-comment-form hidden><input name="comment" placeholder="Adicionar comentario" required/><button class="btn btn-secondary" type="submit">Enviar</button></form>`;
 };
-
 const createMediaCard = (item) => {
   const isVideo = item.media_type === "video";
   const media = isVideo ? `<video src="${escapeHtml(item.public_url)}" preload="metadata" controls playsinline></video>` : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
@@ -195,23 +199,34 @@ const downloadMedia = async (mediaId) => {
 
 const loadGallery = async () => {
   const gallery = document.querySelector("[data-gallery-grid]");
-  if (!gallery || !supabase) return;
+  if (!gallery) return;
+  if (!supabase) { gallery.innerHTML = '<p class="empty-state">Não foi possível conectar à galeria agora.</p>'; return; }
   try {
     galleryItems = await fetchPublicMedia();
     gallery.innerHTML = galleryItems.length ? galleryItems.map(createMediaCard).join("") : '<p class="empty-state">Nenhuma publicação real no momento.</p>';
     bindGalleryModal();
   } catch { gallery.insertAdjacentHTML("beforebegin", '<p class="empty-state">Nao foi possivel carregar a galeria agora.</p>'); }
 };
-const renderFeatured = () => {
+const renderFeatured = (failedItems = 0) => {
   const wrap = document.querySelector("[data-featured-media]");
   if (!wrap || !galleryItems.length) return;
   const item = galleryItems[featuredIndex % galleryItems.length];
   const isVideo = item.media_type === "video";
   wrap.innerHTML = `<article class="featured-slide" data-id="${escapeHtml(item.id)}">${isVideo ? `<video src="${escapeHtml(item.public_url)}" controls playsinline preload="metadata"></video>` : `<img src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`}<div class="featured-info"><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p>${createStatsHtml(item)}</div></article>`;
+  const media = wrap.querySelector("img, video");
+  media?.addEventListener("error", () => {
+    if (failedItems + 1 >= galleryItems.length) {
+      wrap.innerHTML = '<p class="empty-state">As mídias da galeria estão indisponíveis no momento.</p>';
+      return;
+    }
+    featuredIndex = (featuredIndex + 1) % galleryItems.length;
+    renderFeatured(failedItems + 1);
+  }, { once: true });
 };
 const loadPreviewMosaic = async () => {
   const wrap = document.querySelector("[data-featured-media], [data-preview-mosaic]");
-  if (!wrap || !supabase) return;
+  if (!wrap) return;
+  if (!supabase) { wrap.innerHTML = '<p class="empty-state">Não foi possível conectar à galeria agora.</p>'; return; }
   try {
     galleryItems = await fetchPublicMedia(8);
     if (!galleryItems.length) { wrap.innerHTML = '<p class="empty-state">Nenhuma publicação real no momento.</p>'; return; }
