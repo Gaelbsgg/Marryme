@@ -50,18 +50,6 @@ const getDeviceName = () => {
   const platform = navigator.userAgentData?.platform || navigator.platform || "";
   return `${platform} - ${ua}`.slice(0, 240);
 };
-const iconSvg = (name) => ({
-  heart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8Z"/></svg>',
-  send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4 20-7Z"/><path d="M22 2 11 13"/></svg>',
-  download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
-  comment: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>'
-}[name] || "");
-
-const flashIcon = (button) => {
-  if (!button) return;
-  button.classList.add("is-confirmed");
-  window.setTimeout(() => button.classList.remove("is-confirmed"), 5000);
-};
 const getLikedItems = () => {
   try { return JSON.parse(localStorage.getItem(likedStorageKey) || "[]"); } catch { return []; }
 };
@@ -81,11 +69,12 @@ const getEngagement = async (mediaIds = []) => {
 const createStatsHtml = (item) => {
   const stats = item.stats || { like: 0, share: 0, download: 0, comment: 0 };
   return `<div class="post-stats" data-media-id="${escapeHtml(item.id)}">
-    + `<button class="post-icon like-icon ${isLiked(item.id) ? "active" : ""}" type="button" data-like-media aria-label="Curtir">${iconSvg("heart")}</button><span data-like-count>${stats.like || 0}</span>
-    + `<button class="post-icon" type="button" data-share-media aria-label="Compartilhar no WhatsApp">${iconSvg("send")}</button><span data-share-count>${stats.share || 0}</span>
-    + `<button class="post-icon" type="button" data-download-media-public aria-label="Baixar">${iconSvg("download")}</button><span data-download-count>${stats.download || 0}</span>
-    + `<button class="post-icon" type="button" data-toggle-comments aria-label="Comentarios">${iconSvg("comment")}</button><span data-comment-count>${stats.comment || 0}</span>
-    + `</div><div class="comments-panel" data-comments-panel hidden><div class="comments-list" data-comments-list></div><form class="comment-form" data-comment-form><input name="comment" placeholder="Adicionar comentario" required/><button class="btn btn-secondary" type="submit">Enviar</button></form></div>`;
+    <button class="post-icon ${isLiked(item.id) ? "active" : ""}" type="button" data-like-media aria-label="Curtir">♡</button><span data-like-count>${stats.like || 0}</span>
+    <button class="post-icon" type="button" data-share-media aria-label="Compartilhar">↗</button><span data-share-count>${stats.share || 0}</span>
+    <button class="post-icon" type="button" data-download-media-public aria-label="Baixar">↓</button><span data-download-count>${stats.download || 0}</span>
+    <button class="post-icon" type="button" data-toggle-comments aria-label="Comentarios">☰</button><span data-comment-count>${stats.comment || 0}</span>
+  </div>
+  <form class="comment-form" data-comment-form hidden><input name="comment" placeholder="Adicionar comentario" required/><button class="btn btn-secondary" type="submit">Enviar</button></form>`;
 };
 
 const createMediaCard = (item) => {
@@ -136,26 +125,6 @@ const bindGalleryModal = () => {
   }));
 };
 
-const loadMediaComments = async (mediaId, panel) => {
-  const list = panel?.querySelector("[data-comments-list]");
-  if (!list || !mediaId || !supabase) return;
-  list.innerHTML = '<p class="comments-empty">Carregando comentarios...</p>';
-  const [{ data: comments, error }, { data: likes }] = await Promise.all([
-    supabase.from("wedding_media_engagement").select("id, value, device_name, created_at").eq("media_id", mediaId).eq("action", "comment").order("created_at", { ascending: false }),
-    supabase.from("wedding_media_engagement").select("value").eq("media_id", mediaId).eq("action", "comment_like")
-  ]);
-  if (error) { list.innerHTML = '<p class="comments-empty">Nao foi possivel carregar os comentarios.</p>'; return; }
-  const likeCounts = (likes || []).reduce((acc, item) => { acc[item.value] = (acc[item.value] || 0) + 1; return acc; }, {});
-  list.innerHTML = comments?.length ? comments.map((comment) => `<article class="comment-item"><p>${escapeHtml(comment.value || "")}</p><small>${escapeHtml(comment.device_name || "Convidado")} · ${formatDate(comment.created_at)}</small><button class="comment-like" type="button" data-like-comment="${escapeHtml(comment.id)}">${iconSvg("heart")} <span>${likeCounts[comment.id] || 0}</span></button></article>`).join("") : '<p class="comments-empty">Nenhum comentario ainda.</p>';
-};
-
-const likeMediaComment = async (button, mediaId) => {
-  const commentId = button?.dataset.likeComment;
-  if (!commentId || !mediaId || !supabase) return;
-  flashIcon(button);
-  const { error } = await supabase.from("wedding_media_engagement").insert({ media_id: mediaId, action: "comment_like", device_id: getDeviceId(), device_name: getDeviceName(), value: commentId });
-  if (!error) button.querySelector("span").textContent = Number(button.querySelector("span")?.textContent || 0) + 1;
-};
 const updateStatInDom = (mediaId, action, delta) => {
   document.querySelectorAll(`[data-media-id="${CSS.escape(mediaId)}"]`).forEach((stats) => {
     const target = stats.querySelector(`[data-${action}-count]`);
@@ -176,11 +145,10 @@ const bindPostActions = () => {
   document.addEventListener("click", async (event) => {
     const stats = event.target.closest(".post-stats");
     const mediaId = stats?.dataset.mediaId;
-    if (event.target.closest("[data-like-comment]")) { await likeMediaComment(event.target.closest("[data-like-comment]"), mediaId); return; }
-    if (event.target.closest("[data-like-media]")) { flashIcon(event.target.closest("[data-like-media]")); await toggleLike(mediaId); }
-    if (event.target.closest("[data-toggle-comments]")) { const button = event.target.closest("[data-toggle-comments]"); flashIcon(button); const panel = stats?.nextElementSibling; if (panel) { panel.toggleAttribute("hidden"); if (!panel.hidden) await loadMediaComments(mediaId, panel); } }
-    if (event.target.closest("[data-share-media]")) { flashIcon(event.target.closest("[data-share-media]")); await shareMedia(mediaId); }
-    if (event.target.closest("[data-download-media-public]")) { flashIcon(event.target.closest("[data-download-media-public]")); await downloadMedia(mediaId); }
+    if (event.target.closest("[data-like-media]")) await toggleLike(mediaId);
+    if (event.target.closest("[data-toggle-comments]")) stats?.nextElementSibling?.toggleAttribute("hidden");
+    if (event.target.closest("[data-share-media]")) await shareMedia(mediaId);
+    if (event.target.closest("[data-download-media-public]")) await downloadMedia(mediaId);
   });
   document.addEventListener("submit", async (event) => {
     const form = event.target.closest("[data-comment-form]");
@@ -192,7 +160,6 @@ const bindPostActions = () => {
     if (await registerEngagement(mediaId, "comment", value)) {
       form.reset();
       updateStatInDom(mediaId, "comment", 1);
-      await loadMediaComments(mediaId, form.closest("[data-comments-panel]"));
     }
   });
 };
@@ -209,29 +176,19 @@ const toggleLike = async (mediaId) => {
 const shareMedia = async (mediaId) => {
   const item = galleryItems.find((media) => media.id === mediaId);
   if (!item) return;
-  const text = encodeURIComponent(item.caption || "Momento do casamento");
-  const url = encodeURIComponent(item.public_url);
-  if (navigator.share) await navigator.share({ title: item.caption || "Momento do casamento", text: item.caption || "Momento do casamento", url: item.public_url }).catch(() => {});
-  window.open(`https://wa.me/?text=${text}%20${url}`, "_blank", "noopener");
+  if (navigator.share) await navigator.share({ title: item.caption || "Momento do casamento", url: item.public_url }).catch(() => {});
+  else await navigator.clipboard?.writeText(item.public_url).catch(() => {});
   if (await registerEngagement(mediaId, "share")) updateStatInDom(mediaId, "share", 1);
 };
 const downloadMedia = async (mediaId) => {
   const item = galleryItems.find((media) => media.id === mediaId);
   if (!item) return;
-  try {
-    const response = await fetch(item.public_url);
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = item.file_path?.split("/").pop() || "momento-casamento";
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(objectUrl);
-  } catch {
-    window.open(item.public_url, "_blank", "noopener");
-  }
+  const link = document.createElement("a");
+  link.href = item.public_url;
+  link.download = item.file_path?.split("/").pop() || "momento-casamento";
+  document.body.append(link);
+  link.click();
+  link.remove();
   if (await registerEngagement(mediaId, "download")) updateStatInDom(mediaId, "download", 1);
 };
 
@@ -249,7 +206,7 @@ const renderFeatured = () => {
   if (!wrap || !galleryItems.length) return;
   const item = galleryItems[featuredIndex % galleryItems.length];
   const isVideo = item.media_type === "video";
-  wrap.innerHTML = `<article class="featured-slide" data-id="${escapeHtml(item.id)}">${isVideo ? `<video src="${escapeHtml(item.public_url)}" controls playsinline preload="metadata"></video>` : `<img src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`}<div class="featured-info"><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p>${createStatsHtml(item)}</div></article>`;
+  wrap.innerHTML = `<article class="featured-slide" data-id="${escapeHtml(item.id)}">${isVideo ? `<video src="${escapeHtml(item.public_url)}" controls playsinline preload="metadata"></video>` : `<img src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`}<div class="featured-info"><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p>${createStatsHtml(item)}</div><button class="featured-nav featured-prev" type="button" data-featured-prev>‹</button><button class="featured-nav featured-next" type="button" data-featured-next>›</button></article>`;
 };
 const loadPreviewMosaic = async () => {
   const wrap = document.querySelector("[data-featured-media], [data-preview-mosaic]");
@@ -264,6 +221,10 @@ const loadPreviewMosaic = async () => {
 };
 
 document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-featured-prev]")) { featuredIndex = (featuredIndex - 1 + galleryItems.length) % galleryItems.length; renderFeatured(); }
+  if (event.target.closest("[data-featured-next]")) { featuredIndex = (featuredIndex + 1) % galleryItems.length; renderFeatured(); }
+  if (event.target.closest("[data-slide-prev]")) openSlide(slideIndex - 1);
+  if (event.target.closest("[data-slide-next]")) openSlide(slideIndex + 1);
 });
 let touchStartX = 0;
 document.addEventListener("touchstart", (event) => { touchStartX = event.changedTouches[0]?.clientX || 0; }, { passive: true });
@@ -295,36 +256,6 @@ const waitForPublicationDecision = (form) => new Promise((resolve) => {
   panel.querySelector("[data-cancel-post]").addEventListener("click", () => finish(false));
 });
 
-const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-const publicObjectExists = async (path) => {
-  const parts = path.split("/");
-  const fileName = parts.pop();
-  const folder = parts.join("/");
-  const { data, error } = await supabase.storage.from(mediaBucket).list(folder, {
-    limit: 10,
-    search: fileName
-  });
-  if (error) throw error;
-  return (data || []).some((item) => item.name === fileName);
-};
-const uploadPublicFile = async (path, file, uploadOptions) => {
-  let lastError;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const { error } = await supabase.storage.from(mediaBucket).upload(path, file, uploadOptions);
-    if (error) {
-      if (await publicObjectExists(path)) return;
-      lastError = error;
-    } else {
-      for (let check = 0; check < 3; check += 1) {
-        if (await publicObjectExists(path)) return;
-        await wait(500);
-      }
-      lastError = new Error("O arquivo nao apareceu no bucket publico apos o envio.");
-    }
-  }
-  throw lastError || new Error("Nao foi possivel publicar o arquivo.");
-};
-
 const bindMediaForm = () => {
   const form = document.querySelector("[data-media-form]");
   if (!form) return;
@@ -355,15 +286,15 @@ const bindMediaForm = () => {
       setStatus(form, `Publicando ${pendingUploads.length} arquivo(s)...`);
       for (const pending of pendingUploads) {
         const { file, mediaType, path, backupPath, uploadOptions } = pending;
-        await uploadPublicFile(path, file, uploadOptions);
-
+        const { error: uploadError } = await supabase.storage.from(mediaBucket).upload(path, file, uploadOptions);
+        if (uploadError) throw uploadError;
         const { data: publicData } = supabase.storage.from(mediaBucket).getPublicUrl(path);
         const { error: insertError } = await supabase.from("wedding_media").insert({ guest_name: guestName, caption, file_path: path, backup_file_path: backupPath, public_url: publicData.publicUrl, media_type: mediaType, is_public: true, device_id: getDeviceId(), device_name: getDeviceName() });
         if (insertError) throw insertError;
       }
       form.reset();
       setStatus(form, "Momentos enviados com sucesso. Obrigado por compartilhar!");
-    } catch (error) { console.error(error); setStatus(form, `Nao foi possivel enviar: ${error?.message || "erro desconhecido"}. Tente novamente.`, true); }
+    } catch (error) { console.error(error); setStatus(form, "Nao foi possivel enviar agora. Confira a configuracao do Supabase e tente novamente.", true); }
     finally { submit.disabled = false; }
   });
 };
@@ -412,32 +343,12 @@ const loadAdminContent = async () => {
   mediaList.innerHTML = mediaError ? '<p class="admin-empty">Nao foi possivel carregar as midias.</p>' : (media?.length ? media.map(createAdminMediaItem).join("") : '<p class="admin-empty">Nenhuma midia no momento.</p>');
   messageList.innerHTML = messagesError ? '<p class="admin-empty">Nao foi possivel carregar os recados.</p>' : (messages?.length ? messages.map(createAdminMessageItem).join("") : '<p class="admin-empty">Nenhum recado no momento.</p>');
 };
-const loadAdminAnalytics = async () => {
-  const box = document.querySelector("[data-admin-analytics]");
-  if (!box || !supabase) return;
-  const [{ data: media }, { data: engagement }, { data: messages }] = await Promise.all([
-    supabase.from("wedding_media").select("id, guest_name, caption, media_type, device_id, device_name, created_at"),
-    supabase.from("wedding_media_engagement").select("id, media_id, action, device_id, device_name, value, created_at"),
-    supabase.from("wedding_messages").select("id, guest_name, message, device_id, device_name, created_at")
-  ]);
-  const counts = (engagement || []).reduce((acc, item) => { acc[item.action] = (acc[item.action] || 0) + 1; return acc; }, {});
-  const byMedia = (engagement || []).filter((item) => item.action === "like").reduce((acc, item) => { acc[item.media_id] = (acc[item.media_id] || 0) + 1; return acc; }, {});
-  const topId = Object.entries(byMedia).sort((a, b) => b[1] - a[1])[0]?.[0];
-  const topPost = (media || []).find((item) => item.id === topId);
-  const topPhoto = (media || []).filter((item) => item.media_type === "photo").sort((a, b) => (byMedia[b.id] || 0) - (byMedia[a.id] || 0))[0];
-  const topVideo = (media || []).filter((item) => item.media_type === "video").sort((a, b) => (byMedia[b.id] || 0) - (byMedia[a.id] || 0))[0];
-  const commentLikes = (engagement || []).filter((item) => item.action === "comment_like").reduce((acc, item) => { acc[item.value] = (acc[item.value] || 0) + 1; return acc; }, {});
-  const topCommentId = Object.entries(commentLikes).sort((a, b) => b[1] - a[1])[0]?.[0];
-  const topComment = (engagement || []).find((item) => item.action === "comment" && item.id === topCommentId);
-  const devices = [...(media || []), ...(messages || [])].filter((item) => item.device_id).map((item) => `<li><strong>${escapeHtml(item.guest_name)}</strong><br>ID: ${escapeHtml(item.device_id)}<br>${escapeHtml(item.device_name || "Nao registrado")}</li>`).join("");
-  box.innerHTML = `<article class="analytics-card"><strong>Curtidas totais</strong><span>${counts.like || 0}</span></article><article class="analytics-card"><strong>Compartilhamentos totais</strong><span>${counts.share || 0}</span></article><article class="analytics-card"><strong>Downloads totais</strong><span>${counts.download || 0}</span></article><article class="analytics-card"><strong>Post mais curtido</strong><p>${escapeHtml(topPost?.caption || topPost?.guest_name || "Sem dados")}</p></article><article class="analytics-card"><strong>Foto mais curtida</strong><p>${escapeHtml(topPhoto?.caption || topPhoto?.guest_name || "Sem dados")}</p></article><article class="analytics-card"><strong>Video mais curtido</strong><p>${escapeHtml(topVideo?.caption || topVideo?.guest_name || "Sem dados")}</p></article><article class="analytics-card"><strong>Comentario mais curtido</strong><p>${escapeHtml(topComment?.value || "Sem dados")}</p></article><article class="analytics-card analytics-wide"><strong>Dispositivos registrados</strong><ul>${devices || "<li>Sem dados ainda.</li>"}</ul></article>`;
-};
 const bindAdmin = () => {
   const login = document.querySelector("[data-admin-login]");
   const dashboard = document.querySelector("[data-admin-dashboard]");
   const loginForm = document.querySelector("[data-admin-login-form]");
   if (!login || !dashboard || !loginForm) return;
-  const showDashboard = async () => { login.hidden = true; dashboard.hidden = false; await loadAdminContent(); await loadAdminAnalytics(); };
+  const showDashboard = async () => { login.hidden = true; dashboard.hidden = false; await loadAdminContent(); };
   if (sessionStorage.getItem("weddingAdmin") === "true") showDashboard();
   loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -478,9 +389,3 @@ loadGallery();
 loadPreviewMosaic();
 loadMessages();
 bindAdmin();
-
-
-
-
-
-
