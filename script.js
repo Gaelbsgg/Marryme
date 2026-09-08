@@ -1,5 +1,7 @@
 ﻿import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 
+document.documentElement.classList.add("js-ready");
+
 const config = window.SUPABASE_CONFIG || {};
 const isConfigured = Boolean(config.url && config.anonKey && !config.url.includes("SEU-PROJETO") && !config.anonKey.includes("SUA_CHAVE"));
 const supabase = isConfigured ? createClient(config.url, config.anonKey) : null;
@@ -11,7 +13,6 @@ const likedStorageKey = "weddingLikedItems";
 let galleryItems = [];
 let slideIndex = 0;
 let featuredIndex = 0;
-let featuredTimer;
 
 const revealItems = document.querySelectorAll(".reveal");
 if ("IntersectionObserver" in window) {
@@ -206,7 +207,7 @@ const renderFeatured = () => {
   if (!wrap || !galleryItems.length) return;
   const item = galleryItems[featuredIndex % galleryItems.length];
   const isVideo = item.media_type === "video";
-  wrap.innerHTML = `<article class="featured-slide" data-id="${escapeHtml(item.id)}">${isVideo ? `<video src="${escapeHtml(item.public_url)}" controls playsinline preload="metadata"></video>` : `<img src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`}<div class="featured-info"><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p>${createStatsHtml(item)}</div><button class="featured-nav featured-prev" type="button" data-featured-prev>‹</button><button class="featured-nav featured-next" type="button" data-featured-next>›</button></article>`;
+  wrap.innerHTML = `<article class="featured-slide" data-id="${escapeHtml(item.id)}">${isVideo ? `<video src="${escapeHtml(item.public_url)}" controls playsinline preload="metadata"></video>` : `<img src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`}<div class="featured-info"><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p>${createStatsHtml(item)}</div></article>`;
 };
 const loadPreviewMosaic = async () => {
   const wrap = document.querySelector("[data-featured-media], [data-preview-mosaic]");
@@ -215,25 +216,92 @@ const loadPreviewMosaic = async () => {
     galleryItems = await fetchPublicMedia(8);
     if (!galleryItems.length) { wrap.innerHTML = '<p class="empty-state">Nenhuma publicação real no momento.</p>'; return; }
     renderFeatured();
-    clearInterval(featuredTimer);
-    featuredTimer = setInterval(() => { featuredIndex = (featuredIndex + 1) % galleryItems.length; renderFeatured(); }, 10000);
   } catch { wrap.innerHTML = '<p class="empty-state">Nao foi possivel carregar as publicações agora.</p>'; }
 };
 
-document.addEventListener("click", (event) => {
-  if (event.target.closest("[data-featured-prev]")) { featuredIndex = (featuredIndex - 1 + galleryItems.length) % galleryItems.length; renderFeatured(); }
-  if (event.target.closest("[data-featured-next]")) { featuredIndex = (featuredIndex + 1) % galleryItems.length; renderFeatured(); }
-  if (event.target.closest("[data-slide-prev]")) openSlide(slideIndex - 1);
-  if (event.target.closest("[data-slide-next]")) openSlide(slideIndex + 1);
+const bindDragSlider = (surface, navigate) => {
+  if (!surface) return;
+  let startX = 0;
+  let startY = 0;
+  let offsetX = 0;
+  let dragging = false;
+
+  surface.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest("button, input, a")) return;
+    startX = event.clientX;
+    startY = event.clientY;
+    offsetX = 0;
+    dragging = true;
+    surface.classList.add("is-dragging");
+    surface.setPointerCapture(event.pointerId);
+  });
+  surface.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const deltaX = event.clientX - startX;
+    const deltaY = event.clientY - startY;
+    if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 8) {
+      dragging = false;
+      surface.classList.remove("is-dragging");
+      surface.style.removeProperty("--drag-x");
+      return;
+    }
+    offsetX = deltaX;
+    surface.style.setProperty("--drag-x", `${offsetX}px`);
+  });
+  const finishDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    surface.classList.remove("is-dragging");
+    const threshold = Math.min(70, surface.clientWidth * 0.16);
+    if (Math.abs(offsetX) < threshold) {
+      surface.style.removeProperty("--drag-x");
+      return;
+    }
+    const direction = offsetX < 0 ? 1 : -1;
+    surface.style.setProperty("--drag-x", `${direction * -surface.clientWidth}px`);
+    window.setTimeout(() => {
+      navigate(direction);
+      surface.classList.add("is-resetting");
+      surface.style.setProperty("--drag-x", `${direction * surface.clientWidth}px`);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        surface.classList.remove("is-resetting");
+        surface.style.setProperty("--drag-x", "0px");
+      }));
+    }, 220);
+  };
+  surface.addEventListener("dragstart", (event) => event.preventDefault());
+  surface.addEventListener("pointerup", finishDrag);
+  surface.addEventListener("pointercancel", finishDrag);
+};
+
+const initHeroCarousel = () => {
+  const carousel = document.querySelector(".hero-carousel");
+  const slides = [...document.querySelectorAll(".hero-carousel-slide")];
+  const dots = carousel?.querySelector(".hero-carousel-dots");
+  if (!carousel || !slides.length) return;
+  let activeIndex = 0;
+  const render = () => {
+    slides.forEach((slide, index) => {
+      slide.classList.toggle("is-active", index === activeIndex);
+      slide.classList.toggle("is-prev", index === (activeIndex - 1 + slides.length) % slides.length);
+      slide.classList.toggle("is-next", index === (activeIndex + 1) % slides.length);
+    });
+    if (dots) dots.innerHTML = slides.map((_, index) => `<span class="hero-carousel-dot${index === activeIndex ? " is-active" : ""}"></span>`).join("");
+  };
+  render();
+  bindDragSlider(carousel, (direction) => {
+    activeIndex = (activeIndex + direction + slides.length) % slides.length;
+    render();
+  });
+};
+
+bindDragSlider(document.querySelector("[data-featured-media]"), (direction) => {
+  if (!galleryItems.length) return;
+  featuredIndex = (featuredIndex + direction + galleryItems.length) % galleryItems.length;
+  renderFeatured();
 });
-let touchStartX = 0;
-document.addEventListener("touchstart", (event) => { touchStartX = event.changedTouches[0]?.clientX || 0; }, { passive: true });
-document.addEventListener("touchend", (event) => {
-  const delta = (event.changedTouches[0]?.clientX || 0) - touchStartX;
-  if (Math.abs(delta) < 45) return;
-  if (document.querySelector(".modal.open")) openSlide(slideIndex + (delta < 0 ? 1 : -1));
-  else if (event.target.closest("[data-featured-media]")) { featuredIndex = (featuredIndex + (delta < 0 ? 1 : -1) + galleryItems.length) % galleryItems.length; renderFeatured(); }
-}, { passive: true });
+bindDragSlider(document.querySelector(".slide-modal .modal-content"), (direction) => openSlide(slideIndex + direction));
+initHeroCarousel();
 
 const createPendingPublication = (form, seconds = pendingPostSeconds) => {
   form.querySelector("[data-pending-publication]")?.remove();
