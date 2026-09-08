@@ -78,9 +78,12 @@ const createStatsHtml = (item) => {
     <button class="post-icon ${isLiked(item.id) ? "active" : ""}" type="button" data-like-media aria-label="Curtir">${postIcons.like}</button><span data-like-count>${stats.like || 0}</span>
     <button class="post-icon" type="button" data-share-media aria-label="Compartilhar">${postIcons.share}</button><span data-share-count>${stats.share || 0}</span>
     <button class="post-icon" type="button" data-download-media-public aria-label="Baixar">${postIcons.download}</button><span data-download-count>${stats.download || 0}</span>
-    <button class="post-icon" type="button" data-toggle-comments aria-label="Comentários">${postIcons.comment}</button><span data-comment-count>${stats.comment || 0}</span>
+    <button class="post-icon" type="button" data-toggle-comments aria-label="Comentários" aria-expanded="false">${postIcons.comment}</button><span data-comment-count>${stats.comment || 0}</span>
   </div>
-  <form class="comment-form" data-comment-form hidden><input name="comment" placeholder="Adicionar comentario" required/><button class="btn btn-secondary" type="submit">Enviar</button></form>`;
+  <div class="comments-panel" data-comments-panel hidden>
+    <div class="comments-list" data-comments-list></div>
+    <form class="comment-form" data-comment-form><input name="comment" placeholder="Adicionar comentário" required/><button class="btn btn-secondary" type="submit">Enviar</button></form>
+  </div>`;
 };
 const createMediaCard = (item) => {
   const isVideo = item.media_type === "video";
@@ -142,6 +145,16 @@ const registerEngagement = async (mediaId, action, value = "") => {
   const { error } = await supabase.from("wedding_media_engagement").insert({ media_id: mediaId, action, device_id: getDeviceId(), device_name: getDeviceName(), value });
   return !error;
 };
+const loadComments = async (mediaId, panel) => {
+  const list = panel?.querySelector("[data-comments-list]");
+  if (!list || !supabase) return;
+  list.innerHTML = '<p class="comments-status">Carregando comentários...</p>';
+  const { data, error } = await supabase.from("wedding_media_engagement").select("value, created_at").eq("media_id", mediaId).eq("action", "comment").order("created_at", { ascending: true });
+  if (error) { list.innerHTML = '<p class="comments-status">Não foi possível carregar os comentários.</p>'; return; }
+  list.innerHTML = data?.length
+    ? data.map((comment) => `<article class="comment-item"><p>${escapeHtml(comment.value)}</p><time datetime="${escapeHtml(comment.created_at)}">${formatDate(comment.created_at)}</time></article>`).join("")
+    : '<p class="comments-status">Nenhum comentário ainda.</p>';
+};
 const bindPostActions = () => {
   document.addEventListener("dblclick", async (event) => {
     const card = event.target.closest(".media-card, .featured-slide");
@@ -151,7 +164,14 @@ const bindPostActions = () => {
     const stats = event.target.closest(".post-stats");
     const mediaId = stats?.dataset.mediaId;
     if (event.target.closest("[data-like-media]")) await toggleLike(mediaId);
-    if (event.target.closest("[data-toggle-comments]")) stats?.nextElementSibling?.toggleAttribute("hidden");
+    const commentsButton = event.target.closest("[data-toggle-comments]");
+    if (commentsButton && stats) {
+      const panel = stats.nextElementSibling;
+      const willOpen = panel?.hasAttribute("hidden");
+      panel?.toggleAttribute("hidden", !willOpen);
+      commentsButton.setAttribute("aria-expanded", String(willOpen));
+      if (willOpen) await loadComments(mediaId, panel);
+    }
     if (event.target.closest("[data-share-media]")) await shareMedia(mediaId);
     if (event.target.closest("[data-download-media-public]")) await downloadMedia(mediaId);
   });
@@ -159,12 +179,14 @@ const bindPostActions = () => {
     const form = event.target.closest("[data-comment-form]");
     if (!form) return;
     event.preventDefault();
-    const mediaId = form.previousElementSibling?.dataset.mediaId;
+    const panel = form.closest("[data-comments-panel]");
+    const mediaId = panel?.previousElementSibling?.dataset.mediaId;
     const value = form.comment.value.trim();
     if (!value) return;
     if (await registerEngagement(mediaId, "comment", value)) {
       form.reset();
       updateStatInDom(mediaId, "comment", 1);
+      await loadComments(mediaId, panel);
     }
   });
 };
@@ -187,16 +209,19 @@ const shareMedia = async (mediaId) => {
 };
 const downloadMedia = async (mediaId) => {
   const item = galleryItems.find((media) => media.id === mediaId);
-  if (!item) return;
+  if (!item || !supabase) return;
+  const { data: file, error } = await supabase.storage.from(mediaBucket).download(item.file_path);
+  if (error || !file) return;
+  const objectUrl = URL.createObjectURL(file);
   const link = document.createElement("a");
-  link.href = item.public_url;
+  link.href = objectUrl;
   link.download = item.file_path?.split("/").pop() || "momento-casamento";
   document.body.append(link);
   link.click();
   link.remove();
+  URL.revokeObjectURL(objectUrl);
   if (await registerEngagement(mediaId, "download")) updateStatInDom(mediaId, "download", 1);
 };
-
 const loadGallery = async () => {
   const gallery = document.querySelector("[data-gallery-grid]");
   if (!gallery) return;
