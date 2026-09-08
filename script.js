@@ -295,6 +295,36 @@ const waitForPublicationDecision = (form) => new Promise((resolve) => {
   panel.querySelector("[data-cancel-post]").addEventListener("click", () => finish(false));
 });
 
+const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+const publicObjectExists = async (path) => {
+  const parts = path.split("/");
+  const fileName = parts.pop();
+  const folder = parts.join("/");
+  const { data, error } = await supabase.storage.from(mediaBucket).list(folder, {
+    limit: 10,
+    search: fileName
+  });
+  if (error) throw error;
+  return (data || []).some((item) => item.name === fileName);
+};
+const uploadPublicFile = async (path, file, uploadOptions) => {
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const { error } = await supabase.storage.from(mediaBucket).upload(path, file, uploadOptions);
+    if (error) {
+      if (await publicObjectExists(path)) return;
+      lastError = error;
+    } else {
+      for (let check = 0; check < 3; check += 1) {
+        if (await publicObjectExists(path)) return;
+        await wait(500);
+      }
+      lastError = new Error("O arquivo nao apareceu no bucket publico apos o envio.");
+    }
+  }
+  throw lastError || new Error("Nao foi possivel publicar o arquivo.");
+};
+
 const bindMediaForm = () => {
   const form = document.querySelector("[data-media-form]");
   if (!form) return;
@@ -325,15 +355,15 @@ const bindMediaForm = () => {
       setStatus(form, `Publicando ${pendingUploads.length} arquivo(s)...`);
       for (const pending of pendingUploads) {
         const { file, mediaType, path, backupPath, uploadOptions } = pending;
-        const { error: uploadError } = await supabase.storage.from(mediaBucket).upload(path, file, uploadOptions);
-        if (uploadError) throw uploadError;
+        await uploadPublicFile(path, file, uploadOptions);
+
         const { data: publicData } = supabase.storage.from(mediaBucket).getPublicUrl(path);
         const { error: insertError } = await supabase.from("wedding_media").insert({ guest_name: guestName, caption, file_path: path, backup_file_path: backupPath, public_url: publicData.publicUrl, media_type: mediaType, is_public: true, device_id: getDeviceId(), device_name: getDeviceName() });
         if (insertError) throw insertError;
       }
       form.reset();
       setStatus(form, "Momentos enviados com sucesso. Obrigado por compartilhar!");
-    } catch (error) { console.error(error); setStatus(form, "Nao foi possivel enviar agora. Confira a configuracao do Supabase e tente novamente.", true); }
+    } catch (error) { console.error(error); setStatus(form, `Nao foi possivel enviar: ${error?.message || "erro desconhecido"}. Tente novamente.`, true); }
     finally { submit.disabled = false; }
   });
 };
