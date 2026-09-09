@@ -1,4 +1,4 @@
-﻿document.documentElement.classList.add("js-ready");
+document.documentElement.classList.add("js-ready");
 
 const config = window.SUPABASE_CONFIG || {};
 const isConfigured = Boolean(config.url && config.anonKey && !config.url.includes("SEU-PROJETO") && !config.anonKey.includes("SUA_CHAVE"));
@@ -24,6 +24,14 @@ if ("IntersectionObserver" in window) {
 
 const formatDate = (value) => new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(value));
 const escapeHtml = (value = "") => String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
+
+const createUsername = (name = "") => {
+  const parts = String(name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9\s]/g, " ").trim().split(/\s+/).filter(Boolean);
+  const handle = (parts.length > 1 ? parts.slice(0, 2) : parts).join("").toLowerCase();
+  return handle ? `@${handle}` : "@convidado";
+};
+const isQrMedia = (item) => /(^|[\s\/_-])qr(code)?($|[\s._-])/i.test(`${item.caption || ""} ${item.file_path || ""} ${item.public_url || ""}`);
+const statsNumber = (value) => Number(value || 0);
 const setStatus = (form, message, isError = false) => {
   const status = form?.querySelector(".form-status");
   if (!status) return;
@@ -32,7 +40,7 @@ const setStatus = (form, message, isError = false) => {
 };
 const requireSupabase = (form) => {
   if (supabase) return true;
-  setStatus(form, "Configure o arquivo supabase-config.js com a URL e a chave publica do Supabase.", true);
+  setStatus(form, "Configure o arquivo supabase-config.js com a URL e a chave publicação Supabase.", true);
   return false;
 };
 
@@ -75,22 +83,28 @@ const postIcons = {
 const createStatsHtml = (item) => {
   const stats = item.stats || { like: 0, share: 0, download: 0, comment: 0 };
   return `<div class="post-stats" data-media-id="${escapeHtml(item.id)}">
-    <button class="post-icon ${isLiked(item.id) ? "active" : ""}" type="button" data-like-media aria-label="Curtir">${postIcons.like}</button><span data-like-count>${stats.like || 0}</span>
-    <button class="post-icon" type="button" data-share-media aria-label="Compartilhar">${postIcons.share}</button><span data-share-count>${stats.share || 0}</span>
-    <button class="post-icon" type="button" data-download-media-public aria-label="Baixar">${postIcons.download}</button><span data-download-count>${stats.download || 0}</span>
-    <button class="post-icon" type="button" data-toggle-comments aria-label="Comentários" aria-expanded="false">${postIcons.comment}</button><span data-comment-count>${stats.comment || 0}</span>
+    <button class="post-icon ${isLiked(item.id) ? "active" : ""}" type="button" data-like-media aria-label="Curtir publicação">${postIcons.like}</button><span data-like-count>${stats.like || 0}</span>
+    <button class="post-icon" type="button" data-share-media aria-label="Compartilhar publicação">${postIcons.share}</button><span data-share-count>${stats.share || 0}</span>
+    <button class="post-icon" type="button" data-download-media-public aria-label="Baixar foto ou vídeo">${postIcons.download}</button><span data-download-count>${stats.download || 0}</span>
+    <button class="post-icon" type="button" data-toggle-comments aria-label="Ver comentários" aria-expanded="false">${postIcons.comment}</button><span data-comment-count>${stats.comment || 0}</span>
   </div>
   <div class="comments-panel" data-comments-panel hidden>
     <div class="comments-list" data-comments-list></div>
-    <form class="comment-form" data-comment-form><input name="comment" placeholder="Adicionar comentário" required/><button class="btn btn-secondary" type="submit">Enviar</button></form>
+    <form class="comment-form" data-comment-form><input name="comment" placeholder="Adicionar coment�rio" required/><button class="btn btn-secondary" type="submit">Enviar</button></form>
   </div>`;
 };
 const createMediaCard = (item) => {
-  const isVideo = item.media_type === "video";
-  const media = isVideo ? `<video src="${escapeHtml(item.public_url)}" preload="metadata" controls playsinline></video>` : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
-  return `<article class="media-card" data-id="${escapeHtml(item.id)}" data-type="${item.media_type}" data-src="${escapeHtml(item.public_url)}" style="--ratio:1/1">${isVideo ? '<span class="video-badge">▶</span>' : ""}${media}<div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p><small>${formatDate(item.created_at)}</small><div class="media-card-actions"><button class="btn btn-secondary" type="button" data-open-media>Abrir publicação</button></div>${createStatsHtml(item)}</div></article>`;
+  const isVideo = item.media_type === "vídeo";
+  const caption = item.caption || "Momento compartilhado com carinho.";
+  const username = createUsername(item.guest_name);
+  const qrClass = isQrMedia(item) ? " is-qr-media" : "";
+  const media = isVideo ? `<vídeo src="${escapeHtml(item.public_url)}" preload="metadata" controls playsinline></vídeo>` : `<img loading="lazy" decoding="async" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(caption)}"/>`;
+  return `<article class="media-card${qrClass}" data-id="${escapeHtml(item.id)}" data-type="${item.media_type}" data-src="${escapeHtml(item.public_url)}" style="--ratio:1/1">
+    <header class="media-card-header"><strong title="${escapeHtml(item.guest_name)}">${escapeHtml(username)}</strong></header>
+    <div class="media-frame" data-open-media role="button" tabindex="0" aria-label="Abrir publicação">${isVideo ? '<span class="vídeo-badge">?</span>' : ""}${media}</div>
+    <div class="media-card-body">${createStatsHtml(item)}<p class="media-likes"><span data-like-count-text>${statsNumber(item.stats?.like)}</span> curtida${Number(item.stats?.like || 0) === 1 ? "" : "s"}</p><p class="media-caption"><strong>${escapeHtml(username)}</strong> ${escapeHtml(caption)}</p><button class="media-comments-link" type="button" data-toggle-comments-text>Ver comentários</button><small>${formatDate(item.created_at)}</small><div class="media-card-actions"><button class="btn btn-secondary" type="button" data-open-media>Abrir publicação</button></div></div>
+  </article>`;
 };
-
 const fetchPublicMedia = async (limit) => {
   if (!supabase) return [];
   const query = supabase.from("wedding_media").select("id, guest_name, caption, file_path, backup_file_path, public_url, media_type, created_at").eq("is_public", true).order("created_at", { ascending: false });
@@ -114,10 +128,10 @@ const openSlide = (index) => {
   slideIndex = (index + galleryItems.length) % galleryItems.length;
   const item = galleryItems[slideIndex];
   const modalImg = modal.querySelector("img");
-  const modalVideo = modal.querySelector("video");
+  const modalVideo = modal.querySelector("vídeo");
   const modalTitle = modal.querySelector("h2");
   const modalText = modal.querySelector("p");
-  const isVideo = item.media_type === "video";
+  const isVideo = item.media_type === "vídeo";
   modalImg.hidden = isVideo;
   modalImg.src = isVideo ? "" : item.public_url;
   modalVideo.hidden = !isVideo;
@@ -127,16 +141,22 @@ const openSlide = (index) => {
   modal.classList.add("open");
 };
 const bindGalleryModal = () => {
-  document.querySelectorAll(".media-card [data-open-media]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll(".media-card [data-open-media]").forEach((button) => button.addEventListener("click", (event) => {
+    if (button.classList.contains("media-frame") && event.target.closest("vídeo")) return;
     const id = button.closest(".media-card")?.dataset.id;
     openSlide(Math.max(0, galleryItems.findIndex((item) => item.id === id)));
   }));
+  document.querySelectorAll(".media-card .media-frame").forEach((frame) => frame.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    frame.click();
+  }));
 };
-
 const updateStatInDom = (mediaId, action, delta) => {
   document.querySelectorAll(`[data-media-id="${CSS.escape(mediaId)}"]`).forEach((stats) => {
     const target = stats.querySelector(`[data-${action}-count]`);
     if (target) target.textContent = Math.max(0, Number(target.textContent || 0) + delta);
+    if (action === "like") stats.closest(".media-card")?.querySelector("[data-like-count-text]")?.replaceChildren(document.createTextNode(target?.textContent || "0"));
     if (action === "like") stats.querySelector("[data-like-media]")?.classList.toggle("active", delta > 0);
   });
 };
@@ -150,10 +170,10 @@ const loadComments = async (mediaId, panel) => {
   if (!list || !supabase) return;
   list.innerHTML = '<p class="comments-status">Carregando comentários...</p>';
   const { data, error } = await supabase.from("wedding_media_engagement").select("value, created_at").eq("media_id", mediaId).eq("action", "comment").order("created_at", { ascending: true });
-  if (error) { list.innerHTML = '<p class="comments-status">Não foi possível carregar os comentários.</p>'; return; }
+  if (error) { list.innerHTML = '<p class="comments-status">Nãoi poss�vel carregar os comentários.</p>'; return; }
   list.innerHTML = data?.length
     ? data.map((comment) => `<article class="comment-item"><p>${escapeHtml(comment.value)}</p><time datetime="${escapeHtml(comment.created_at)}">${formatDate(comment.created_at)}</time></article>`).join("")
-    : '<p class="comments-status">Nenhum comentário ainda.</p>';
+    : '<p class="comments-status">Nenhum coment�rio ainda.</p>';
 };
 const bindPostActions = () => {
   document.addEventListener("dblclick", async (event) => {
@@ -164,13 +184,16 @@ const bindPostActions = () => {
     const stats = event.target.closest(".post-stats");
     const mediaId = stats?.dataset.mediaId;
     if (event.target.closest("[data-like-media]")) await toggleLike(mediaId);
-    const commentsButton = event.target.closest("[data-toggle-comments]");
-    if (commentsButton && stats) {
-      const panel = stats.nextElementSibling;
+    const commentsButton = event.target.closest("[data-toggle-comments], [data-toggle-comments-text]");
+    if (commentsButton) {
+      const card = commentsButton.closest(".media-card, .featured-slide");
+      const statsBlock = stats || card?.querySelector(".post-stats");
+      const targetMediaId = statsBlock?.dataset.mediaId;
+      const panel = statsBlock?.nextElementSibling;
       const willOpen = panel?.hasAttribute("hidden");
       panel?.toggleAttribute("hidden", !willOpen);
-      commentsButton.setAttribute("aria-expanded", String(willOpen));
-      if (willOpen) await loadComments(mediaId, panel);
+      statsBlock?.querySelector("[data-toggle-comments]")?.setAttribute("aria-expanded", String(willOpen));
+      if (willOpen) await loadComments(targetMediaId, panel);
     }
     if (event.target.closest("[data-share-media]")) await shareMedia(mediaId);
     if (event.target.closest("[data-download-media-public]")) await downloadMedia(mediaId);
@@ -225,23 +248,23 @@ const downloadMedia = async (mediaId) => {
 const loadGallery = async () => {
   const gallery = document.querySelector("[data-gallery-grid]");
   if (!gallery) return;
-  if (!supabase) { gallery.innerHTML = '<p class="empty-state">Não foi possível conectar à galeria agora.</p>'; return; }
+  if (!supabase) { gallery.innerHTML = '<p class="empty-state">Nãoi poss�vel conectar � galeria agora.</p>'; return; }
   try {
     galleryItems = await fetchPublicMedia();
     gallery.innerHTML = galleryItems.length ? galleryItems.map(createMediaCard).join("") : '<p class="empty-state">Nenhuma publicação real no momento.</p>';
     bindGalleryModal();
-  } catch { gallery.insertAdjacentHTML("beforebegin", '<p class="empty-state">Nao foi possivel carregar a galeria agora.</p>'); }
+  } catch { gallery.insertAdjacentHTML("beforebegin", '<p class="empty-state">Nãoi possivel carregar a galeria agora.</p>'); }
 };
 const renderFeatured = (failedItems = 0) => {
   const wrap = document.querySelector("[data-featured-media]");
   if (!wrap || !galleryItems.length) return;
   const item = galleryItems[featuredIndex % galleryItems.length];
-  const isVideo = item.media_type === "video";
-  wrap.innerHTML = `<article class="featured-slide" data-id="${escapeHtml(item.id)}">${isVideo ? `<video src="${escapeHtml(item.public_url)}" controls playsinline preload="metadata"></video>` : `<img src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`}<div class="featured-info"><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p>${createStatsHtml(item)}</div></article>`;
-  const media = wrap.querySelector("img, video");
+  const isVideo = item.media_type === "vídeo";
+  wrap.innerHTML = `<article class="featured-slide" data-id="${escapeHtml(item.id)}">${isVideo ? `<vídeo src="${escapeHtml(item.public_url)}" controls playsinline preload="metadata"></vídeo>` : `<img src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`}<div class="featured-info"><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Momento compartilhado com carinho.")}</p>${createStatsHtml(item)}</div></article>`;
+  const media = wrap.querySelector("img, vídeo");
   media?.addEventListener("error", () => {
     if (failedItems + 1 >= galleryItems.length) {
-      wrap.innerHTML = '<p class="empty-state">As mídias da galeria estão indisponíveis no momento.</p>';
+      wrap.innerHTML = '<p class="empty-state">As m�dias da galeria est�o indispon�veis no momento.</p>';
       return;
     }
     featuredIndex = (featuredIndex + 1) % galleryItems.length;
@@ -251,12 +274,12 @@ const renderFeatured = (failedItems = 0) => {
 const loadPreviewMosaic = async () => {
   const wrap = document.querySelector("[data-featured-media], [data-preview-mosaic]");
   if (!wrap) return;
-  if (!supabase) { wrap.innerHTML = '<p class="empty-state">Não foi possível conectar à galeria agora.</p>'; return; }
+  if (!supabase) { wrap.innerHTML = '<p class="empty-state">Nãoi poss�vel conectar � galeria agora.</p>'; return; }
   try {
     galleryItems = await fetchPublicMedia(8);
     if (!galleryItems.length) { wrap.innerHTML = '<p class="empty-state">Nenhuma publicação real no momento.</p>'; return; }
     renderFeatured();
-  } catch { wrap.innerHTML = '<p class="empty-state">Nao foi possivel carregar as publicações agora.</p>'; }
+  } catch { wrap.innerHTML = '<p class="empty-state">Nãoi possivel carregar as publica��es agora.</p>'; }
 };
 
 const bindDragSlider = (surface, navigate) => {
@@ -344,9 +367,9 @@ bindDragSlider(document.querySelector(".slide-modal .modal-content"), (direction
 initHeroCarousel();
 
 const createPendingPublication = (form, seconds = pendingPostSeconds) => {
-  form.querySelector("[data-pending-publication]")?.remove();
+  form.querySelector("[data-pending-publicaçãon]")?.remove();
   const panel = document.createElement("div");
-  panel.className = "pending-publication";
+  panel.className = "pending-publicaçãon";
   panel.dataset.pendingPublication = "";
   panel.innerHTML = `<div class="pending-timer" data-pending-timer>${seconds}s</div><div class="pending-actions"><button class="btn btn-primary" type="button" data-confirm-post>Confirmar postagem</button><button class="btn btn-secondary" type="button" data-cancel-post>Cancelar postagem</button></div><p class="pending-warning">Tempo limite para cancelar a postagem ${seconds}s.</p>`;
   form.append(panel);
@@ -374,13 +397,13 @@ const bindMediaForm = () => {
     const files = Array.from(form.media.files || []);
     const guestName = form["guest-name"].value.trim();
     const caption = form.caption.value.trim();
-    if (!files.length) { setStatus(form, "Escolha pelo menos uma foto ou video.", true); return; }
+    if (!files.length) { setStatus(form, "Escolha pelo menos uma foto ou vídeo.", true); return; }
     submit.disabled = true;
     setStatus(form, `Enviando backup de ${files.length} arquivo(s)...`);
     try {
       const pendingUploads = [];
       for (const file of files) {
-        const mediaType = file.type.startsWith("video/") ? "video" : "photo";
+        const mediaType = file.type.startsWith("vídeo/") ? "vídeo" : "photo";
         const extension = file.name.split(".").pop()?.toLowerCase() || "bin";
         const path = `${mediaType}s/${Date.now()}-${crypto.randomUUID()}.${extension}`;
         const uploadOptions = { cacheControl: "3600", contentType: file.type, upsert: false };
@@ -389,7 +412,7 @@ const bindMediaForm = () => {
         if (error) throw error;
         pendingUploads.push({ file, mediaType, path, backupPath, uploadOptions });
       }
-      setStatus(form, "Backup salvo. Confirme para publicar agora ou aguarde 60 segundos.");
+      setStatus(form, "Backup salvo. Confirme para publicaçãou aguarde 60 segundos.");
       if (!(await waitForPublicationDecision(form))) { form.reset(); setStatus(form, "Postagem cancelada. O backup permanece armazenado para os noivos."); return; }
       setStatus(form, `Publicando ${pendingUploads.length} arquivo(s)...`);
       for (const pending of pendingUploads) {
@@ -402,7 +425,7 @@ const bindMediaForm = () => {
       }
       form.reset();
       setStatus(form, "Momentos enviados com sucesso. Obrigado por compartilhar!");
-    } catch (error) { console.error(error); setStatus(form, "Nao foi possivel enviar agora. Confira a configuracao do Supabase e tente novamente.", true); }
+    } catch (error) { console.error(error); setStatus(form, "Nãoi possivel enviar agora. Confira a configuracao do Supabase e tente novamente.", true); }
     finally { submit.disabled = false; }
   });
 };
@@ -412,7 +435,7 @@ const loadMessages = async () => {
   const wall = document.querySelector("[data-messages-wall], [data-main-messages]");
   if (!wall || !supabase) return;
   const { data, error } = await supabase.from("wedding_messages").select("id, guest_name, message, created_at").order("created_at", { ascending: false }).limit(wall.matches("[data-main-messages]") ? 3 : 100);
-  if (error) { wall.insertAdjacentHTML("beforebegin", '<p class="empty-state">Nao foi possivel carregar os recados agora.</p>'); return; }
+  if (error) { wall.insertAdjacentHTML("beforebegin", '<p class="empty-state">Nãoi possivel carregar os recados agora.</p>'); return; }
   wall.innerHTML = data?.length ? data.map(createMessageCard).join("") : '<p class="empty-state">Nenhum recado real no momento.</p>';
 };
 const bindMessageForm = () => {
@@ -426,7 +449,7 @@ const bindMessageForm = () => {
     setStatus(form, "Enviando recado...");
     const { error } = await supabase.from("wedding_messages").insert({ guest_name: form.name.value.trim(), message: form.message.value.trim(), device_id: getDeviceId(), device_name: getDeviceName() });
     submit.disabled = false;
-    if (error) { console.error(error); setStatus(form, "Nao foi possivel enviar o recado agora.", true); return; }
+    if (error) { console.error(error); setStatus(form, "Nãoi possivel enviar o recado agora.", true); return; }
     form.reset(); setStatus(form, "Recado enviado com carinho."); await loadMessages();
   });
 };
@@ -434,12 +457,31 @@ const bindMessageForm = () => {
 document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", () => document.querySelector(".modal")?.classList.remove("open")));
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") document.querySelector(".modal")?.classList.remove("open"); });
 
-const createAdminMediaItem = (item) => {
-  const isVideo = item.media_type === "video";
-  const preview = isVideo ? `<video src="${escapeHtml(item.public_url)}" preload="metadata" muted playsinline></video>` : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
-  return `<article class="admin-item" data-id="${item.id}" data-file-path="${escapeHtml(item.file_path)}" data-backup-file-path="${escapeHtml(item.backup_file_path || "")}">${preview}<div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Sem legenda")}</p><small>${formatDate(item.created_at)} · ${isVideo ? "Video" : "Foto"}<br>ID aparelho: ${escapeHtml(item.device_id || "Nao registrado")}<br>Aparelho: ${escapeHtml(item.device_name || "Nao registrado")}</small></div><div class="admin-actions"><button class="btn btn-secondary" type="button" data-download-media data-download-url="${escapeHtml(item.public_url)}">Baixar</button><button class="btn btn-secondary" type="button" data-delete-site-media>Excluir bucket Site</button><button class="btn btn-secondary" type="button" data-delete-backup-media>Excluir backup</button><button class="btn btn-secondary btn-danger" type="button" data-delete-both-media>Excluir ambos</button></div></article>`;
+const renderMobileBottomNavigation = () => {
+  const mount = document.querySelector("[data-mobile-bottom-navigation]");
+  if (!mount) return;
+  const path = window.location.pathname.toLowerCase();
+  const file = path.split("/").pop() || "index.html";
+  const isHome = file === "" || file === "index.html";
+  const isFeed = file === "galeria.html";
+  mount.innerHTML = `<nav class="mobile-bottom-navigation" aria-label="Navega??o principal">
+    <a class="mobile-nav-item${isHome ? " active" : ""}" href="index.html" aria-label="Ir para Home"${isHome ? ' aria-current="page"' : ""}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1Z"/></svg><span>Home</span>
+    </a>
+    <a class="mobile-nav-share" href="compartilhar.html" aria-label="Compartilhar foto ou vídeo">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Compartilhar</span>
+    </a>
+    <a class="mobile-nav-item${isFeed ? " active" : ""}" href="galeria.html" aria-label="Ir para Feed"${isFeed ? ' aria-current="page"' : ""}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h4M7 12h10M7 16h7"/></svg><span>Feed</span>
+    </a>
+  </nav>`;
 };
-const createAdminMessageItem = (item) => `<article class="admin-item" data-id="${item.id}"><div></div><div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.message)}</p><small>${formatDate(item.created_at)}<br>ID aparelho: ${escapeHtml(item.device_id || "Nao registrado")}<br>Aparelho: ${escapeHtml(item.device_name || "Nao registrado")}</small></div><button class="btn btn-secondary" type="button" data-delete-message>Excluir texto</button></article>`;
+const createAdminMediaItem = (item) => {
+  const isVideo = item.media_type === "vídeo";
+  const preview = isVideo ? `<vídeo src="${escapeHtml(item.public_url)}" preload="metadata" muted playsinline></vídeo>` : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
+  return `<article class="admin-item" data-id="${item.id}" data-file-path="${escapeHtml(item.file_path)}" data-backup-file-path="${escapeHtml(item.backup_file_path || "")}">${preview}<div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.caption || "Sem legenda")}</p><small>${formatDate(item.created_at)} � ${isVideo ? "Video" : "Foto"}<br>ID aparelho: ${escapeHtml(item.device_id || "Não registrado")}<br>Aparelho: ${escapeHtml(item.device_name || "Não registrado")}</small></div><div class="admin-actions"><button class="btn btn-secondary" type="button" data-download-media data-download-url="${escapeHtml(item.public_url)}">Baixar</button><button class="btn btn-secondary" type="button" data-delete-site-media>Excluir bucket Site</button><button class="btn btn-secondary" type="button" data-delete-backup-media>Excluir backup</button><button class="btn btn-secondary btn-danger" type="button" data-delete-both-media>Excluir ambos</button></div></article>`;
+};
+const createAdminMessageItem = (item) => `<article class="admin-item" data-id="${item.id}"><div></div><div><strong>${escapeHtml(item.guest_name)}</strong><p>${escapeHtml(item.message)}</p><small>${formatDate(item.created_at)}<br>ID aparelho: ${escapeHtml(item.device_id || "Não registrado")}<br>Aparelho: ${escapeHtml(item.device_name || "Não registrado")}</small></div><button class="btn btn-secondary" type="button" data-delete-message>Excluir texto</button></article>`;
 const loadAdminContent = async () => {
   const mediaList = document.querySelector("[data-admin-media]");
   const messageList = document.querySelector("[data-admin-messages]");
@@ -448,8 +490,8 @@ const loadAdminContent = async () => {
     supabase.from("wedding_media").select("id, guest_name, caption, file_path, backup_file_path, public_url, media_type, created_at, device_id, device_name").order("created_at", { ascending: false }),
     supabase.from("wedding_messages").select("id, guest_name, message, created_at, device_id, device_name").order("created_at", { ascending: false })
   ]);
-  mediaList.innerHTML = mediaError ? '<p class="admin-empty">Nao foi possivel carregar as midias.</p>' : (media?.length ? media.map(createAdminMediaItem).join("") : '<p class="admin-empty">Nenhuma midia no momento.</p>');
-  messageList.innerHTML = messagesError ? '<p class="admin-empty">Nao foi possivel carregar os recados.</p>' : (messages?.length ? messages.map(createAdminMessageItem).join("") : '<p class="admin-empty">Nenhum recado no momento.</p>');
+  mediaList.innerHTML = mediaError ? '<p class="admin-empty">Nãoi possivel carregar as midias.</p>' : (media?.length ? media.map(createAdminMediaItem).join("") : '<p class="admin-empty">Nenhuma midia no momento.</p>');
+  messageList.innerHTML = messagesError ? '<p class="admin-empty">Nãoi possivel carregar os recados.</p>' : (messages?.length ? messages.map(createAdminMessageItem).join("") : '<p class="admin-empty">Nenhum recado no momento.</p>');
 };
 const bindAdmin = () => {
   const login = document.querySelector("[data-admin-login]");
@@ -488,6 +530,7 @@ const bindAdmin = () => {
   });
 };
 
+renderMobileBottomNavigation();
 bindGalleryFilters();
 bindGalleryModal();
 bindMediaForm();
