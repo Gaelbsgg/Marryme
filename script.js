@@ -544,7 +544,7 @@ const initNativeMediaPicker = () => {
     sheet.innerHTML = `<div class="media-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="media-picker-title"><button type="button" class="media-picker-close" aria-label="Cancelar">×</button><h2 id="media-picker-title">Adicionar momento</h2><button type="button" class="media-picker-option" data-camera-choice>📷 <span><strong>Tirar foto</strong><small>Usar a câmera do aparelho</small></span></button><button type="button" class="media-picker-option" data-gallery-choice>🖼️ <span><strong>Escolher da galeria</strong><small>Selecionar foto ou vídeo</small></span></button><button type="button" class="media-picker-cancel">Cancelar</button><input type="file" accept="image/*" capture="environment" data-camera-input hidden><input type="file" accept="image/*,video/*" data-gallery-input hidden></div>`;
     document.body.append(sheet);
     const close = () => sheet.remove();
-    const forward = (input) => { input.addEventListener("change", async () => { const file = input.files?.[0]; if (!file) return close(); await saveCapturedFile(file); input.value = ""; close(); location.href = "compartilhar.html"; }); };
+    const forward = (input) => { input.addEventListener("change", async () => { const file = input.files?.[0]; if (!file) return close(); input.value = ""; close(); openMomentConfirmation(file); }); };
     const camera = sheet.querySelector("[data-camera-input]"), gallery = sheet.querySelector("[data-gallery-input]");
     forward(camera); forward(gallery);
     sheet.querySelector("[data-camera-choice]").onclick = () => camera.click();
@@ -552,6 +552,45 @@ const initNativeMediaPicker = () => {
     sheet.querySelector(".media-picker-close").onclick = close; sheet.querySelector(".media-picker-cancel").onclick = close;
     sheet.addEventListener("click", (item) => { if (item.target === sheet) close(); });
   });
+};
+
+const publishMoment = async ({ guestName, caption, files }) => {
+  const pendingUploads = [];
+  for (const file of files) {
+    const mediaType = file.type.startsWith("video/") ? "video" : "photo";
+    const extension = file.name.split(".").pop()?.toLowerCase() || "bin";
+    const path = `${mediaType}s/${Date.now()}-${crypto.randomUUID()}.${extension}`;
+    const uploadOptions = { cacheControl: "3600", contentType: file.type, upsert: false };
+    const backupPath = `backup/${path}`;
+    const { error: backupError } = await supabase.storage.from(backupBucket).upload(backupPath, file, uploadOptions);
+    if (backupError) throw backupError;
+    pendingUploads.push({ file, mediaType, path, backupPath, uploadOptions });
+  }
+  for (const pending of pendingUploads) {
+    const { error: uploadError } = await supabase.storage.from(mediaBucket).upload(pending.path, pending.file, pending.uploadOptions);
+    if (uploadError) throw uploadError;
+    const { data: publicData } = supabase.storage.from(mediaBucket).getPublicUrl(pending.path);
+    const { error: insertError } = await supabase.from("wedding_media").insert({ guest_name: guestName, caption, file_path: pending.path, backup_file_path: pending.backupPath, public_url: publicData.publicUrl, media_type: pending.mediaType, is_public: true, device_id: getDeviceId(), device_name: getDeviceName() });
+    if (insertError) throw insertError;
+  }
+};
+
+const openMomentConfirmation = (file) => {
+  const existing = document.querySelector("[data-moment-confirmation]");
+  existing?.remove();
+  const isVideo = file.type.startsWith("video/");
+  const url = URL.createObjectURL(file);
+  const modal = document.createElement("div");
+  modal.className = "moment-confirmation-backdrop";
+  modal.dataset.momentConfirmation = "";
+  modal.innerHTML = `<section class="moment-confirmation" role="dialog" aria-modal="true" aria-labelledby="moment-confirmation-title"><h2 id="moment-confirmation-title">Compartilhar momento</h2><div class="moment-preview">${isVideo ? `<video src="${url}" controls muted playsinline></video>` : `<img src="${url}" alt="Prévia da mídia selecionada"/>`}</div><form><div class="field"><label for="quick-guest-name">Nome do convidado</label><input id="quick-guest-name" name="guest-name" type="text" autocomplete="name" placeholder="Seu nome" required/></div><div class="field"><label for="quick-caption">Legenda opcional</label><textarea id="quick-caption" name="caption" rows="2" placeholder="Escreva algo sobre este momento..."></textarea></div><p class="quick-status" role="status" aria-live="polite"></p><div class="quick-actions"><button type="button" class="btn btn-secondary" data-quick-cancel aria-label="Cancelar publicação">Cancelar</button><button type="submit" class="btn btn-primary" aria-label="Publicar momento">Publicar</button></div></form></section>`;
+  document.body.append(modal);
+  const form = modal.querySelector("form"), cancel = modal.querySelector("[data-quick-cancel]"), status = modal.querySelector(".quick-status"), submit = form.querySelector("[type=submit]");
+  const cleanup = () => { URL.revokeObjectURL(url); modal.remove(); };
+  cancel.onclick = cleanup;
+  form.onsubmit = async (event) => { event.preventDefault(); if (!requireSupabase(form)) return; submit.disabled = true; cancel.disabled = true; submit.textContent = "Publicando..."; status.textContent = "Publicando..."; try { await publishMoment({ guestName: form.elements["guest-name"].value.trim(), caption: form.elements.caption.value.trim(), files: [file] }); cleanup(); if (document.querySelector("[data-gallery-grid]")) await loadGallery(); else if (document.querySelector("[data-featured-media]")) await loadPreviewMosaic(); } catch (error) { console.error(error); submit.disabled = false; cancel.disabled = false; submit.textContent = "Publicar"; status.textContent = "Não foi possível publicar este momento. Tente novamente."; status.classList.add("is-error"); } };
+  modal.addEventListener("click", (event) => { if (event.target === modal) cleanup(); });
+  modal.querySelector("input").focus();
 };
 renderMobileBottomNavigation();
 initNativeMediaPicker();
