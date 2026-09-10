@@ -536,8 +536,25 @@ const bindAdmin = () => {
   });
 };
 
+const initNativeMediaPicker = () => {
+  document.querySelector(".mobile-nav-share")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    const sheet = document.createElement("div");
+    sheet.className = "media-picker-backdrop";
+    sheet.innerHTML = `<div class="media-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="media-picker-title"><button type="button" class="media-picker-close" aria-label="Cancelar">×</button><h2 id="media-picker-title">Adicionar momento</h2><button type="button" class="media-picker-option" data-camera-choice>📷 <span><strong>Tirar foto</strong><small>Usar a câmera do aparelho</small></span></button><button type="button" class="media-picker-option" data-gallery-choice>🖼️ <span><strong>Escolher da galeria</strong><small>Selecionar foto ou vídeo</small></span></button><button type="button" class="media-picker-cancel">Cancelar</button><input type="file" accept="image/*" capture="environment" data-camera-input hidden><input type="file" accept="image/*,video/*" data-gallery-input hidden></div>`;
+    document.body.append(sheet);
+    const close = () => sheet.remove();
+    const forward = (input) => { input.addEventListener("change", async () => { const file = input.files?.[0]; if (!file) return close(); await saveCapturedFile(file); input.value = ""; close(); location.href = "compartilhar.html"; }); };
+    const camera = sheet.querySelector("[data-camera-input]"), gallery = sheet.querySelector("[data-gallery-input]");
+    forward(camera); forward(gallery);
+    sheet.querySelector("[data-camera-choice]").onclick = () => camera.click();
+    sheet.querySelector("[data-gallery-choice]").onclick = () => gallery.click();
+    sheet.querySelector(".media-picker-close").onclick = close; sheet.querySelector(".media-picker-cancel").onclick = close;
+    sheet.addEventListener("click", (item) => { if (item.target === sheet) close(); });
+  });
+};
 renderMobileBottomNavigation();
-initMediaCapture();
+initNativeMediaPicker();
 bindGalleryFilters();
 bindGalleryModal();
 bindMediaForm();
