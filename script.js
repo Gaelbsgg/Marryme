@@ -8,6 +8,7 @@ const backupBucket = config.backupBucket || "wedding-media-backup";
 const pendingPostSeconds = 60;
 const deviceStorageKey = "weddingDeviceId";
 const likedStorageKey = "weddingLikedItems";
+const captureDbName = "media-capture-flow";
 let galleryItems = [];
 let slideIndex = 0;
 let featuredIndex = 0;
@@ -390,6 +391,9 @@ const waitForPublicationDecision = (form) => new Promise((resolve) => {
 const bindMediaForm = () => {
   const form = document.querySelector("[data-media-form]");
   if (!form) return;
+  const request = indexedDB.open(captureDbName, 1);
+  request.onupgradeneeded = () => request.result.createObjectStore("files");
+  request.onsuccess = () => { const db = request.result; const get = db.transaction("files", "readonly").objectStore("files").get("pending"); get.onsuccess = () => { if (!get.result) return; const transfer = new DataTransfer(); transfer.items.add(get.result); form.media.files = transfer.files; setStatus(form, "Mídia selecionada pela câmera."); db.transaction("files", "readwrite").objectStore("files").delete("pending"); }; };
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!requireSupabase(form)) return;
@@ -476,6 +480,8 @@ const renderMobileBottomNavigation = () => {
     </a>
   </nav>`;
 };
+const saveCapturedFile = (file) => new Promise((resolve, reject) => { const request = indexedDB.open(captureDbName, 1); request.onupgradeneeded = () => request.result.createObjectStore("files"); request.onsuccess = () => { const tx = request.result.transaction("files", "readwrite"); tx.objectStore("files").put(file, "pending"); tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); }; request.onerror = () => reject(request.error); });
+const initMediaCapture = () => { document.querySelector(".mobile-nav-share")?.addEventListener("click", async (event) => { event.preventDefault(); const overlay = document.createElement("section"); overlay.className = "media-capture"; overlay.innerHTML = `<button class="capture-close" aria-label="Fechar câmera">×</button><button class="capture-switch" aria-label="Trocar câmera">↻</button><video autoplay playsinline muted></video><p class="capture-error" hidden></p><input type="file" accept="image/*,video/*" hidden><div class="capture-controls"><button class="capture-gallery" aria-label="Escolher foto ou vídeo">▧<small>Galeria</small></button><button class="capture-shutter" aria-label="Tirar foto"></button></div>`; document.body.append(overlay); const video = overlay.querySelector("video"), input = overlay.querySelector("input"), error = overlay.querySelector(".capture-error"); let stream, facing = "environment"; const stop = () => { stream?.getTracks().forEach((track) => track.stop()); overlay.remove(); }; const start = async () => { try { stream?.getTracks().forEach((track) => track.stop()); stream = await navigator.mediaDevices?.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false }); if (!stream) throw new Error(); video.srcObject = stream; } catch { error.hidden = false; error.textContent = "Não foi possível acessar a câmera. Escolha uma foto ou vídeo do dispositivo."; } }; overlay.querySelector(".capture-close").onclick = stop; overlay.querySelector(".capture-gallery").onclick = () => input.click(); overlay.querySelector(".capture-switch").onclick = () => { facing = facing === "environment" ? "user" : "environment"; start(); }; input.onchange = async () => { if (input.files[0]) { await saveCapturedFile(input.files[0]); stop(); location.href = "compartilhar.html"; } }; overlay.querySelector(".capture-shutter").onclick = () => { if (!video.videoWidth) return; const canvas = document.createElement("canvas"); canvas.width = video.videoWidth; canvas.height = video.videoHeight; canvas.getContext("2d").drawImage(video, 0, 0); canvas.toBlob(async (blob) => { await saveCapturedFile(new File([blob], `captura-${Date.now()}.jpg`, { type: "image/jpeg" })); stop(); location.href = "compartilhar.html"; }, "image/jpeg", .92); }; await start(); }); };
 const createAdminMediaItem = (item) => {
   const isVideo = item.media_type === "vídeo";
   const preview = isVideo ? `<vídeo src="${escapeHtml(item.public_url)}" preload="metadata" muted playsinline></vídeo>` : `<img loading="lazy" src="${escapeHtml(item.public_url)}" alt="${escapeHtml(item.caption || "Momento compartilhado")}"/>`;
@@ -531,6 +537,7 @@ const bindAdmin = () => {
 };
 
 renderMobileBottomNavigation();
+initMediaCapture();
 bindGalleryFilters();
 bindGalleryModal();
 bindMediaForm();
